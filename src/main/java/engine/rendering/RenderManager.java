@@ -1,101 +1,92 @@
 package engine.rendering;
 
 import engine.EngineManager;
-import engine.object.Model;
+import engine.util.Camera;
+import engine.util.Mesh;
+import engine.util.ObjectLoader;
 import logger.Logger;
+import org.joml.Matrix4f;
 import org.lwjgl.opengl.*;
+import org.lwjgl.system.MemoryStack;
+
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
+import java.util.List;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL30.*;
+import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.glfw.GLFW.*;
 
 public class RenderManager implements Runnable{
     private Logger logger = EngineManager.logger;
 
-    private long windowHandle;
+    private long window;
+    private int width = 800;
+    private int height = 600;
 
-    //temp
-    Model model;
-
-    @Override
     public void run() {
         init();
         loop();
-        cleanup();
+
+        // Cleanup
+        glfwTerminate();
     }
 
     private void init() {
-        if (!glfwInit()) {
-            logger.error(new IllegalStateException("unable to initialize GLFW"));
-        }
+        if (!glfwInit()) throw new IllegalStateException("GLFW konnte nicht initialisiert werden");
 
-        glfwDefaultWindowHints();
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
-        windowHandle = glfwCreateWindow(2000, 1000, "GameEngine", NULL, NULL);
-        if (windowHandle == NULL) {
-            logger.error(new RuntimeException("unable to create window"));
-        }
+        window = glfwCreateWindow(width, height, "OpenGL based engine", NULL, NULL);
+        if (window == NULL) throw new RuntimeException("Fenster-Erstellung fehlgeschlagen");
 
-        glfwMakeContextCurrent(windowHandle);
-        glfwShowWindow(windowHandle);
-
+        glfwMakeContextCurrent(window);
+        glfwSwapInterval(1); // V-Sync
         GL.createCapabilities();
-        logger.info("OpenGL Version: " + glGetString(GL_VERSION));
 
-
-        float[] vertices = {
-                -0.5f, -0.5f, 0.0f, // Unten links
-                0.5f, -0.5f, 0.0f, // Unten rechts
-                0.0f,  0.5f, 0.0f  // Oben Mitte
-        };
-
-
-
-        model = new Model(vertices);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-
-
+        glEnable(GL_DEPTH_TEST); // Wichtig für 3D
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     }
 
     private void loop() {
-        glClearColor(0.1f, 0.1f, 0.1f, 0.1f);
+        // 1. Komponenten laden
+        ShaderProgram shader = new ShaderProgram("src/main/shaders/vertex.glsl", "src/main/shaders/fragment.glsl");
+        Mesh cubeMesh = ObjectLoader.loadOBJ("src/main/models/Cube.obj");
+        Camera camera = new Camera();
 
-        while (!glfwWindowShouldClose(windowHandle)) {
+        Matrix4f modelMatrix = new Matrix4f();
+        FloatBuffer fb = org.lwjgl.BufferUtils.createFloatBuffer(16);
+
+        while (!glfwWindowShouldClose(window)) {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            int vao = glGenVertexArrays();
-            glBindVertexArray(vao);
+            shader.bind();
 
-// 2. VBO erstellen und Daten hochladen
-            int vbo = glGenBuffers();
-            glBindBuffer(GL_ARRAY_BUFFER, vbo);
-            glBufferData(GL_ARRAY_BUFFER, model.getVertices(), GL_STATIC_DRAW);
+            // Kamera updaten (für den Fall von Window-Resizing)
+            camera.update(width, height);
+            camera.upload(shader.getProgramId()); // Methode in Camera ggf. anpassen
 
-            glVertexAttribPointer(0,  3, GL_FLOAT, false, 0, 0);
-            glEnableVertexAttribArray(0);
+            // Würfel rotieren lassen
+            modelMatrix.identity().rotate((float) glfwGetTime(), 0, 1, 0);
+            int modelLoc = shader.getUniformLocation("model");
+            glUniformMatrix4fv(modelLoc, false, modelMatrix.get(fb));
 
-            glBindVertexArray(vao);
-            glDrawArrays(GL_TRIANGLES, 0, model.getVertices().length / 3); // 3 ist die Anzahl der Vertices
-            glBindVertexArray(0);
+            // Rendern
+            cubeMesh.render();
 
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-            glBindVertexArray(0);
+            shader.unbind();
 
-            glfwSwapBuffers(windowHandle);
+            glfwSwapBuffers(window);
             glfwPollEvents();
         }
-    }
 
-    private void cleanup() {
-        glfwDestroyWindow(windowHandle);
-        glfwTerminate();
+        // Cleanup der Ressourcen
+        cubeMesh.cleanup();
+        shader.cleanup();
     }
 }
 
