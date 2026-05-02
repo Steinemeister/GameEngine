@@ -53,7 +53,6 @@ public class RenderManager implements Runnable{
     }
 
     private void loop() {
-        // 1. Komponenten laden
         ShaderProgram shader = new ShaderProgram("src/main/shaders/vertex.glsl", "src/main/shaders/fragment.glsl");
         Mesh cubeMesh = ObjectLoader.loadOBJ("src/main/models/Cube.obj");
         Camera camera = new Camera();
@@ -66,9 +65,8 @@ public class RenderManager implements Runnable{
 
             shader.bind();
 
-            // Kamera updaten (für den Fall von Window-Resizing)
             camera.update(width, height);
-            camera.upload(shader.getProgramId()); // Methode in Camera ggf. anpassen
+            camera.upload(shader.getProgramId());
 
             // Würfel rotieren lassen
             modelMatrix.identity().rotate((float) glfwGetTime(), 0, 1, 0);
