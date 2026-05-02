@@ -86,7 +86,7 @@ dependencies {
     implementation ("org.lwjgl", "lwjgl-nuklear", classifier = lwjglNatives)
     implementation ("org.lwjgl", "lwjgl-openal", classifier = lwjglNatives)
     implementation ("org.lwjgl", "lwjgl-opengl", classifier = lwjglNatives)
-    implementation ("org.lwjgl", "lwjgl-opengles", classifier = lwjglNatives)
+    //implementation ("org.lwjgl", "lwjgl-opengles", classifier = lwjglNatives)
     implementation ("org.lwjgl", "lwjgl-openxr", classifier = lwjglNatives)
     implementation ("org.lwjgl", "lwjgl-opus", classifier = lwjglNatives)
     implementation ("org.lwjgl", "lwjgl-par", classifier = lwjglNatives)
