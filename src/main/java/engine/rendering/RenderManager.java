@@ -102,7 +102,7 @@ public class RenderManager implements Runnable{
         List<Object> sceneObjects = new ArrayList<>();
 
 
-        Mesh cubeMesh = ObjectLoader.loadOBJ("src/main/resources/models/Cube.obj");
+        Mesh cubeMesh = ObjectLoader.loadOBJ("src/main/resources/models/bunny.obj");
         Mesh floorMesh = ObjectLoader.loadOBJ("src/main/resources/models/floor.obj");
 
         Object cube = new Object(cubeMesh);

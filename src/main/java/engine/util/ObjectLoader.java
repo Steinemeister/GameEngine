@@ -1,6 +1,7 @@
 package engine.util;
 
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -70,23 +71,21 @@ public class ObjectLoader {
     }
 
     private static Mesh createMesh(List<float[]> vertices, List<Integer> indices) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            // Buffer befüllen
-            FloatBuffer vBuffer = stack.mallocFloat(vertices.size() * 8);
+        FloatBuffer vBuffer = MemoryUtil.memAllocFloat(vertices.size() * 8);
+        IntBuffer iBuffer = MemoryUtil.memAllocInt(indices.size());
+
+        try {
             for (float[] v : vertices) vBuffer.put(v);
             vBuffer.flip();
 
-            IntBuffer iBuffer = stack.mallocInt(indices.size());
             for (int i : indices) iBuffer.put(i);
             iBuffer.flip();
 
-            // OpenGL Setup
             int vao = glGenVertexArrays();
             int vbo = glGenBuffers();
             int ebo = glGenBuffers();
 
             glBindVertexArray(vao);
-
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
             glBufferData(GL_ARRAY_BUFFER, vBuffer, GL_STATIC_DRAW);
 
@@ -102,7 +101,13 @@ public class ObjectLoader {
             glEnableVertexAttribArray(2);
 
             glBindVertexArray(0);
+
             return new Mesh(vao, vbo, ebo, indices.size());
+        } finally {
+            // Unbedingt den Speicher wieder freigeben!
+            MemoryUtil.memFree(vBuffer);
+            MemoryUtil.memFree(iBuffer);
         }
+
     }
 }
