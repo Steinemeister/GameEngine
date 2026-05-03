@@ -3,6 +3,7 @@ package engine.rendering;
 import engine.EngineManager;
 import engine.util.Camera;
 import engine.util.Mesh;
+import engine.util.Object;
 import engine.util.ObjectLoader;
 import logger.Logger;
 import org.joml.Matrix4f;
@@ -86,6 +87,19 @@ public class RenderManager implements Runnable{
         cubeMesh.cleanup();
         shader.cleanup();
     }
+
+    private void render(Object object, ShaderProgram shader, Camera camera) {
+        FloatBuffer fb = org.lwjgl.BufferUtils.createFloatBuffer(16);
+
+        shader.bind();
+        camera.update(width, height);
+        camera.upload(shader.getProgramId());
+
+
+        object.getMesh().render();
+
+        shader.unbind();
+
+
+    }
 }
-
-
