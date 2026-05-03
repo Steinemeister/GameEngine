@@ -98,16 +98,6 @@ public class RenderManager implements Runnable{
                 new Vector3f(1.0f, 1.0f, 1.0f),
                 1.0f
         ));
-        pointLights.add(new PointLight(
-                new Vector3f(-5.0f, 2.0f, 0.0f),
-                new Vector3f(1.0f, 0.0f, 0.0f),
-                0.8f
-        ));
-        pointLights.add(new PointLight(
-                new Vector3f(0.0f, 3.0f, -5.0f),
-                new Vector3f(0.0f, 0.0f, 1.0f),
-                1.2f
-        ));
 
         List<Object> sceneObjects = new ArrayList<>();
 
