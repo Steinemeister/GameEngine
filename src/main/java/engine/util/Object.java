@@ -1,24 +1,34 @@
 package engine.util;
 
 import org.joml.Matrix4f;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 public class Object {
-    Mesh mesh;
-    Matrix4f modelMatrix;
+    private final Mesh mesh;
+    private Vector3f position;
+    private Vector3f rotation;
+    private float scale;
 
     public Object(Mesh mesh) {
         this.mesh = mesh;
+        this.position = new Vector3f(0, 0, 0);
+        this.rotation = new Vector3f(0, 0, 0);
+        this.scale = 1.0f;
     }
 
     public Matrix4f getModelMatrix() {
-        return modelMatrix;
+        return new Matrix4f()
+                .translate(position)
+                .rotateXYZ((float)Math.toRadians(rotation.x),
+                        (float)Math.toRadians(rotation.y),
+                        (float)Math.toRadians(rotation.z))
+                .scale(scale);
     }
 
-    public Mesh getMesh() {
-        return mesh;
-    }
-
-    public void cleanup() {
-        mesh.cleanup();
-    }
+    // Getter und Setter für die Transformationen
+    public Mesh getMesh() { return mesh; }
+    public Vector3f getPosition() { return position; }
+    public Vector3f getRotation() { return rotation; }
+    public void setScale(float scale) { this.scale = scale; }
 }

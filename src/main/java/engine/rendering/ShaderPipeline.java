@@ -1,8 +1,13 @@
 package engine.rendering;
 
+import engine.lighting.PointLight;
+import logger.Logger;
+import logger.LoggerFactory;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.BufferUtils;
+import org.lwjgl.system.MemoryStack;
+
 import java.nio.FloatBuffer;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -16,16 +21,17 @@ import static org.lwjgl.opengl.GL32.GL_GEOMETRY_SHADER;
 import static org.lwjgl.opengl.GL40.GL_TESS_CONTROL_SHADER;
 import static org.lwjgl.opengl.GL40.GL_TESS_EVALUATION_SHADER;
 
-public class ShaderProgram {
+public class ShaderPipeline {
+    private final Logger logger = LoggerFactory.getLogger("shaderPipeline");
     private final int programId;
     private final Map<String, Integer> uniforms = new HashMap<>();
     private final FloatBuffer matrixBuffer = BufferUtils.createFloatBuffer(16);
 
-    public ShaderProgram(String vertexPath, String fragmentPath) {
+    public ShaderPipeline(String vertexPath, String fragmentPath) {
         this(vertexPath, fragmentPath, null, null, null);
     }
 
-    public ShaderProgram(String vertexPath, String fragmentPath, String geometryPath, String tessControlPath, String tessEvalPath) {
+    public ShaderPipeline(String vertexPath, String fragmentPath, String geometryPath, String tessControlPath, String tessEvalPath) {
         programId = glCreateProgram();
         List<Integer> shaderIds = new ArrayList<>();
 
@@ -40,7 +46,7 @@ public class ShaderProgram {
 
         glLinkProgram(programId);
         if (glGetProgrami(programId, GL_LINK_STATUS) == GL_FALSE) {
-            throw new RuntimeException("Shader Link Error: " + glGetProgramInfoLog(programId));
+            logger.error(new RuntimeException("error linkin shader: " + glGetProgramInfoLog(programId)));
         }
 
         for (int id : shaderIds) {
@@ -57,13 +63,14 @@ public class ShaderProgram {
             glCompileShader(shaderId);
 
             if (glGetShaderi(shaderId, GL_COMPILE_STATUS) == GL_FALSE) {
-                throw new RuntimeException("Kompilierfehler in " + path + ": " + glGetShaderInfoLog(shaderId));
+                logger.error(new RuntimeException("compiler error while compiling: " + path + ": " + glGetShaderInfoLog(shaderId)));
             }
 
             glAttachShader(programId, shaderId);
             return shaderId;
         } catch (Exception e) {
-            throw new RuntimeException("Konnte Shader nicht laden: " + path, e);
+            logger.error(new RuntimeException("unable to load shader: " + path, e));
+            return  0;
         }
     }
 
@@ -89,6 +96,27 @@ public class ShaderProgram {
 
     public void setUniform(String name, int value) {
         glUniform1i(getUniformLocation(name), value);
+    }
+
+    public void setUniform(String name, Matrix4f[] matrices) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            FloatBuffer buffer = stack.mallocFloat(matrices.length * 16);
+            for (Matrix4f m : matrices) m.get(buffer); // Schreibt Matrizen nacheinander in den Buffer
+            buffer.flip();
+            glUniformMatrix4fv(getUniformLocation(name), false, buffer);
+        }
+    }
+
+    public void setLights(List<PointLight> lights) {
+        int count = Math.min(lights.size(), 10); // MAX_LIGHTS (hier 10)
+        setUniform("activeLightCount", count);
+
+        for (int i = 0; i < count; i++) {
+            PointLight light = lights.get(i);
+            setUniform("lights[" + i + "].position", light.position);
+            setUniform("lights[" + i + "].color", light.color);
+            setUniform("lights[" + i + "].intensity", light.intensity);
+        }
     }
 
     public void bind() {

@@ -1,0 +1,12 @@
+# Liegendes Rechteck mit umgekehrter Windung
+# (Normalen zeigen jetzt nach unten)
+
+v -1.0 0.0 -0.5
+v 1.0 0.0 -0.5
+v 1.0 0.0 0.5
+v -1.0 0.0 0.5
+
+# Dreieck 1 (Reihenfolge 3-2-1 statt 1-2-3)
+f 3 2 1
+# Dreieck 2 (Reihenfolge 4-3-1 statt 1-3-4)
+f 4 3 1
