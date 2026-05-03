@@ -12,7 +12,7 @@ public class Camera {
     private float baseSpeed = 5.0f, sensitivity = 13.0f;
 
     public void update(float aspectRatio) {
-        projection.setPerspective((float) Math.toRadians(45.0f), aspectRatio, 0.1f, 1000.0f);
+        projection.setPerspective((float) Math.toRadians(45.0f), aspectRatio, Constants.ZNear, Constants.ZFar);
     }
 
     public void handleInput(InputManager input, float deltaTime) {

@@ -119,95 +119,118 @@ public class RenderManager implements Runnable{
         secondCube.getRotation().set(0, 45, 0);
         sceneObjects.add(secondCube);
 
+        Scene scene = new Scene(pointLights, sceneObjects);
+
         Camera camera = new Camera();
 
-        // Initialisierung Shadow-Buffer für jedes Licht (hier Beispiel mit einem Licht)
-        PointShadowBuffer shadowBuffer = new PointShadowBuffer();
-        float farPlane = 25.0f;
         InputManager input = new InputManager(window);
 
         lastFrameTime = glfwGetTime();
 
         while (!glfwWindowShouldClose(window)) {
 
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
             double thisFrameTime = glfwGetTime();
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
 
             camera.handleInput(input, deltaTime);
+            camera.update(aspectRatio);
 
-            // --- PHASE 1: SHADOW PASS ---
-            shadowShader.bind();
-            for (int i = 0; i < pointLights.size(); i++) {
-                PointLight light = pointLights.get(i);
-                shadowBuffer.bind();
-                glClear(GL_DEPTH_BUFFER_BIT); // Nur Tiefe löschen
+            renderShadowMaps(scene, shadowShader);
 
-                Vector3f lightPos = light.position;
-                shadowShader.setUniform("lightPos", lightPos);
-                shadowShader.setUniform("far_plane", farPlane);
-                shadowShader.setUniform("shadowMatrices", shadowBuffer.getShadowMatrices(lightPos));
+            glViewport(0, 0, width, height);
 
-                glCullFace(GL_FRONT); // Vorderseiten im Shadow Pass entfernen
-                renderSceneSimple(shadowShader, sceneObjects);
-                glCullFace(GL_BACK);
-                shadowBuffer.unbind(width, height);
-            }
+            bindShadowMaps(scene.lights, mainShader);
 
-
-            // --- PHASE 2: LIGHTING PASS ---
-            glViewport(0, 0, width, height); // Viewport zurück auf Fenstergröße!
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            mainShader.bind();
-            // Cubemap an Textur-Slot binden (z.B. Slot 1)
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, shadowBuffer.getDepthCubemap());
-            mainShader.setUniform("shadowMaps[0]", 1); // Zeigt auf Slot 1
-
-            mainShader.setUniform("far_plane", farPlane);
-            mainShader.setUniform("viewPos", camera.getPosition());
-
-            // Finale Szene rendern
-            renderSceneFull(mainShader, sceneObjects, camera, pointLights);
+            renderScene(scene, mainShader, camera);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
     }
 
-    private void renderSceneSimple(ShaderPipeline shadowShader, List<Object> sceneObjects) {
-        for (Object object : sceneObjects) {
-            // Setze die Model-Matrix, damit der Shader weiß, wo das Objekt steht
-            shadowShader.setUniform("model", object.getModelMatrix());
+    private void bindShadowMaps(List<PointLight> lights, ShaderPipeline mainPipeline) {
+        mainPipeline.bind();
 
-            // Rendert das Mesh (VAO Bind -> DrawElements -> VAO Unbind)
-            object.getMesh().render();
+        for (int i = 0; i < lights.size(); i++) {
+            PointLight light = lights.get(i);
+
+            glActiveTexture(GL_TEXTURE0 + i);
+
+            glBindTexture(GL_TEXTURE_CUBE_MAP, light.fbo.depthCubemap);
+
+            mainPipeline.setUniform("lights[" + i + "].shadowMap", i);
+
+            mainPipeline.setUniform("lights[" + i + "].position", light.position);
+            mainPipeline.setUniform("lights[" + i + "].color", light.color.mul(light.intensity, new Vector3f()));
         }
     }
 
-    private void renderSceneFull(ShaderPipeline shader, List<Object> sceneObjects, Camera camera, List<PointLight> pointLights) {
+    private void renderScene(Scene scene, ShaderPipeline pipeline, Camera camera) {
+        pipeline.bind();
 
-        shader.bind();
-        camera.update(aspectRatio);
+        if (camera != null) {
+            pipeline.setUniform("view", camera.getView());
+            pipeline.setUniform("projection", camera.getProjection());
+            pipeline.setUniform("far_plane", Constants.ZFar);
+        }
 
+        for (Object obj : scene.objects) {
+            Matrix4f modelMatrix = obj.getModelMatrix();
 
-        shader.setUniform("viewPos", camera.getPosition());
+            pipeline.setUniform("model", modelMatrix);
 
-        shader.setUniform("projection", camera.getProjection());
-        shader.setUniform("view", camera.getView());
+            Mesh mesh = obj.getMesh();
+            glBindVertexArray(mesh.vao());
 
-        sceneObjects.forEach(object -> {
-            shader.setUniform("model", object.getModelMatrix());
+            glDrawElements(GL_TRIANGLES, mesh.vertexCount(), GL_UNSIGNED_INT, 0);
 
-            shader.setLights(pointLights);
+            glBindVertexArray(0);
+        }
+    }
 
-            object.getMesh().render();
-        });
+    private void renderShadowMaps(Scene scene, ShaderPipeline shadowPipeline) {
+        List<PointLight> lights = scene.lights;
 
+        shadowPipeline.bind();
+        glEnable(GL_DEPTH_TEST);
 
-        shader.unbind();
+        for (PointLight light : lights) {
+            glViewport(0, 0, light.fbo.shadowMapSize, light.fbo.shadowMapSize);
+            light.fbo.bind();
+            glClear(GL_DEPTH_BUFFER_BIT);
 
+            Matrix4f[] transforms = calculateShadowTransforms(light.position);
 
+            for (int i = 0; i < 6; i++) {
+                shadowPipeline.setUniform("shadowMatrices[" + i + "]", transforms[i]);
+            }
+            shadowPipeline.setUniform("lightPos", light.position);
+            shadowPipeline.setUniform("far_plane", Constants.ZFar);
+
+            renderScene(scene, shadowPipeline, null);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+    }
+
+    private Matrix4f[] calculateShadowTransforms(Vector3f lightPos) {
+        float aspect = 1.0f;
+        float near = 1.0f;
+        float far = 100.0f;
+        Matrix4f proj = new Matrix4f().perspective((float) Math.toRadians(90.0f), aspect, near, far);
+
+        return new Matrix4f[] {
+                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add( 1,  0,  0), new Vector3f(0, -1,  0)),
+                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(-1,  0,  0), new Vector3f(0, -1,  0)),
+                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add( 0,  1,  0), new Vector3f(0,  0,  1)),
+                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add( 0, -1,  0), new Vector3f(0,  0, -1)),
+                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add( 0,  0,  1), new Vector3f(0, -1,  0)),
+                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add( 0,  0, -1), new Vector3f(0, -1,  0))
+        };
     }
 }
