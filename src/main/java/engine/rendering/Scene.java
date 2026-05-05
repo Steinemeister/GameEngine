@@ -1,7 +1,7 @@
 package engine.rendering;
 
 import engine.lighting.PointLight;
-import engine.util.Object;
+import engine.object.Object;
 
 import java.util.List;
 

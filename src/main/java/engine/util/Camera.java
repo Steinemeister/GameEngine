@@ -21,7 +21,6 @@ public class Camera {
 
         float currentMouseSpeed = sensitivity * deltaTime;
 
-        // 1. Rotation (Maus) - bleibt gleich
         yaw += input.getMouseDeltaX() * currentMouseSpeed;
         pitch -= input.getMouseDeltaY() * currentMouseSpeed;
         pitch = Math.max(-89.9f, Math.min(89.9f, pitch));

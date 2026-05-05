@@ -9,10 +9,12 @@ struct Light {
 
 in vec3 FragPos;
 in vec3 Normal;
+in vec2 FragUV;
 
 uniform vec3 viewPos;
 uniform Light lights[1];
 uniform float far_plane;
+uniform sampler2D diffuseTexture;
 
 float calculateShadow(vec3 fragPos, Light light) {
     vec3 fragToLight = fragPos - light.position;
@@ -26,7 +28,7 @@ float calculateShadow(vec3 fragPos, Light light) {
 
 
     // Bias gegen Shadow Acne
-    float bias = 0.05;
+    float bias = 0.03;
     return (currentDepth - bias) > closestDepth ? 1.0 : 0.0;
 }
 
@@ -64,7 +66,5 @@ void main() {
     // Gamma-Korrektur (optional, hilft gegen zu dunkle Bilder)
     totalLight = pow(totalLight, vec3(1.0/2.2));
 
-    FragColor = vec4(totalLight, 1.0);
-
-    //FragColor = vec4(1.0);
+    FragColor = vec4(totalLight, 1.0) * texture(diffuseTexture, FragUV);
 }

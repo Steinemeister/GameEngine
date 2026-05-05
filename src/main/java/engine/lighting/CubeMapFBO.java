@@ -12,7 +12,7 @@ import static org.lwjgl.opengl.GL32.*;
 
 public class CubeMapFBO {
 
-    public int shadowMapSize = 1024;
+    public int shadowMapSize = 4096;
     public int depthCubemap = glGenTextures();
 
     float aspect = 1.0f;

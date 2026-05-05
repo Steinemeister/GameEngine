@@ -1,5 +1,8 @@
 package engine.util;
 
+import logger.Logger;
+import logger.LoggerFactory;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -14,7 +17,13 @@ public class InputManager {
 
     private boolean firstMouse = true;
 
+    Logger logger;
+
     public InputManager(long window) {
+        logger = LoggerFactory.getLogger("inputLogger for window: " + window);
+
+        logger.info("initializing new inputManager");
+
         keyBindings.put("FORWARD", GLFW_KEY_W);
         keyBindings.put("BACKWARD", GLFW_KEY_S);
         keyBindings.put("LEFT", GLFW_KEY_A);

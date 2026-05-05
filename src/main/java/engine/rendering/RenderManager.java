@@ -1,10 +1,12 @@
 package engine.rendering;
 
-import engine.EngineManager;
 import engine.lighting.PointLight;
+import engine.object.Mesh;
+import engine.object.Texture;
 import engine.util.*;
-import engine.util.Object;
+import engine.object.Object;
 import logger.Logger;
+import logger.LoggerFactory;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.*;
@@ -18,7 +20,7 @@ import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.glfw.GLFW.*;
 
 public class RenderManager implements Runnable{
-    private final Logger logger = EngineManager.logger;
+    private Logger logger;
 
     private long window;
     private int width = 1;
@@ -33,10 +35,15 @@ public class RenderManager implements Runnable{
         loop();
 
         // Cleanup
+        logger.info("terminating GLFW");
         glfwTerminate();
     }
 
     private void init() {
+        logger = LoggerFactory.getLogger("renderLogger");
+
+        logger.info("initializing renderer");
+
         if (!glfwInit()) logger.error(new IllegalStateException("unable to initialize GLFW"));
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -64,6 +71,7 @@ public class RenderManager implements Runnable{
 
 
         glfwSetFramebufferSizeCallback(window, (windowHandle, newWidth, newHeight) -> {
+            logger.info("resizing framebuffer to new size of: " + newWidth + "x" + newHeight);
            glViewport(0, 0, newWidth, newHeight);
 
             this.width = newWidth;
@@ -79,6 +87,8 @@ public class RenderManager implements Runnable{
     }
 
     private void loop() {
+        logger.info("starting rendering loop");
+
         ShaderPipeline shadowShader = new ShaderPipeline(
                 "src/main/resources/shaders/shadow_v.glsl",
                 "src/main/resources/shaders/shadow_f.glsl",
@@ -91,10 +101,21 @@ public class RenderManager implements Runnable{
                 "src/main/resources/shaders/main_f.glsl"
         );
 
+        mainShader.setUniformBindCallback(((object, camera) -> {
+            if (object.getTexture() != null) {
+                object.getTexture().bind(10);
+                mainShader.setUniform("diffuseTexture", 10);
+            }
+
+            mainShader.setUniform("view", camera.getView());
+            mainShader.setUniform("projection", camera.getProjection());
+            mainShader.setUniform("far_plane", Constants.ZFar);
+        }));
+
         List<PointLight> pointLights = new ArrayList<>();
 
         pointLights.add(new PointLight(
-                new Vector3f(2.0f, 5.0f, 2.0f),
+                new Vector3f(2.0f, 4.0f, 2.0f),
                 new Vector3f(1.0f, 1.0f, 1.0f),
                 1.0f
         ));
@@ -102,22 +123,20 @@ public class RenderManager implements Runnable{
         List<Object> sceneObjects = new ArrayList<>();
 
 
-        Mesh cubeMesh = ObjectLoader.loadOBJ("src/main/resources/models/bunny.obj");
-        Mesh floorMesh = ObjectLoader.loadOBJ("src/main/resources/models/floor.obj");
+        Mesh cubeMesh = Loader.loadOBJ("src/main/resources/models/Cube.obj");
+        Mesh floorMesh = Loader.loadOBJ("src/main/resources/models/floor.obj");
 
-        Object cube = new Object(cubeMesh);
-        cube.getPosition().set(0, 1, 0);
+        Texture CubeTexture = new Texture("src/main/resources/textures/Cube.png");
+        Texture FloorTexture = new Texture("src/main/resources/textures/floor.png");
+
+        Object cube = new Object(cubeMesh, CubeTexture);
+        cube.getPosition().set(0, 0.5, 0);
         sceneObjects.add(cube);
 
-        Object floor = new Object(floorMesh);
+        Object floor = new Object(floorMesh, FloorTexture);
         floor.getPosition().set(0, 0, 0);
         floor.setScale(10.0f);
         sceneObjects.add(floor);
-
-        Object secondCube = new Object(cubeMesh);
-        secondCube.getPosition().set(-3, 0.5f, 2);
-        secondCube.getRotation().set(0, 45, 0);
-        sceneObjects.add(secondCube);
 
         Scene scene = new Scene(pointLights, sceneObjects);
 
@@ -135,6 +154,8 @@ public class RenderManager implements Runnable{
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
 
+            pointLights.getFirst().position.rotateAxis((float) Math.toRadians(deltaTime * 15), 0, 1, 0);
+
             camera.handleInput(input, deltaTime);
             camera.update(aspectRatio);
 
@@ -151,6 +172,7 @@ public class RenderManager implements Runnable{
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
+        logger.info("stopping rendering loop");
     }
 
     private void bindShadowMaps(List<PointLight> lights, ShaderPipeline mainPipeline) {
@@ -173,16 +195,11 @@ public class RenderManager implements Runnable{
     private void renderScene(Scene scene, ShaderPipeline pipeline, Camera camera) {
         pipeline.bind();
 
-        if (camera != null) {
-            pipeline.setUniform("view", camera.getView());
-            pipeline.setUniform("projection", camera.getProjection());
-            pipeline.setUniform("far_plane", Constants.ZFar);
-        }
-
         for (Object obj : scene.objects) {
-            Matrix4f modelMatrix = obj.getModelMatrix();
 
-            pipeline.setUniform("model", modelMatrix);
+            pipeline.setUniformsFor(obj, camera);
+
+            pipeline.setUniform("model", obj.getModelMatrix());
 
             Mesh mesh = obj.getMesh();
             glBindVertexArray(mesh.vao());

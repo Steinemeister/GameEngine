@@ -1,6 +1,8 @@
 package engine.rendering;
 
 import engine.lighting.PointLight;
+import engine.object.Object;
+import engine.util.Camera;
 import logger.Logger;
 import logger.LoggerFactory;
 import org.joml.Matrix4f;
@@ -15,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL32.GL_GEOMETRY_SHADER;
@@ -26,12 +29,15 @@ public class ShaderPipeline {
     private final int programId;
     private final Map<String, Integer> uniforms = new HashMap<>();
     private final FloatBuffer matrixBuffer = BufferUtils.createFloatBuffer(16);
+    private BiConsumer<Object, Camera> setUniforms;
 
     public ShaderPipeline(String vertexPath, String fragmentPath) {
         this(vertexPath, fragmentPath, null, null, null);
     }
 
-    public ShaderPipeline(String vertexPath, String fragmentPath, String geometryPath, String tessControlPath, String tessEvalPath) {
+    public ShaderPipeline(String vertexPath, String fragmentPath, String geometryPath,
+                          String tessControlPath, String tessEvalPath) {
+
         programId = glCreateProgram();
         List<Integer> shaderIds = new ArrayList<>();
 
@@ -107,16 +113,14 @@ public class ShaderPipeline {
         }
     }
 
-    public void setLights(List<PointLight> lights) {
-        int count = Math.min(lights.size(), 10); // MAX_LIGHTS (hier 10)
-        setUniform("activeLightCount", count);
-
-        for (int i = 0; i < count; i++) {
-            PointLight light = lights.get(i);
-            setUniform("lights[" + i + "].position", light.position);
-            setUniform("lights[" + i + "].color", light.color);
-            setUniform("lights[" + i + "].intensity", light.intensity);
+    public void setUniformsFor(Object object, Camera camera) {
+        if (setUniforms != null) {
+            setUniforms.accept(object, camera);
         }
+    }
+
+    public void setUniformBindCallback(BiConsumer<Object, Camera> setUniforms) {
+        this.setUniforms = setUniforms;
     }
 
     public void bind() {

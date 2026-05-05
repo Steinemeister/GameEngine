@@ -1,17 +1,20 @@
-package engine.util;
+package engine.object;
 
 import org.joml.Matrix4f;
-import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 public class Object {
     private final Mesh mesh;
+    private final Texture texture;
+
     private Vector3f position;
     private Vector3f rotation;
     private float scale;
 
-    public Object(Mesh mesh) {
+    public Object(Mesh mesh, Texture texture) {
         this.mesh = mesh;
+        this.texture = texture;
+
         this.position = new Vector3f(0, 0, 0);
         this.rotation = new Vector3f(0, 0, 0);
         this.scale = 1.0f;
@@ -31,4 +34,5 @@ public class Object {
     public Vector3f getPosition() { return position; }
     public Vector3f getRotation() { return rotation; }
     public void setScale(float scale) { this.scale = scale; }
+    public Texture getTexture() { return texture; }
 }

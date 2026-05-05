@@ -1,10 +1,9 @@
 package engine.util;
 
-import org.lwjgl.system.MemoryStack;
+import engine.object.Mesh;
 import org.lwjgl.system.MemoryUtil;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.nio.FloatBuffer;
@@ -14,7 +13,7 @@ import java.util.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
 
-public class ObjectLoader {
+public class Loader {
 
 
     private record VertexKey(int pIdx, int tIdx, int nIdx) {}
