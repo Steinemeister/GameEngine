@@ -14,7 +14,12 @@ in vec2 FragUV;
 uniform vec3 viewPos;
 uniform Light lights[1];
 uniform float far_plane;
+
 uniform sampler2D diffuseTexture;
+uniform sampler2D ambientTexture;
+uniform sampler2D specularTexture;
+uniform sampler2D specularExponentTexture;
+
 
 float calculateShadow(vec3 fragPos, Light light) {
     vec3 fragToLight = fragPos - light.position;
@@ -37,8 +42,7 @@ void main() {
     vec3 viewDir = normalize(viewPos - FragPos);
     vec3 totalLight = vec3(0.0);
 
-    // Test-Ambient, damit es nie ganz schwarz ist
-    vec3 ambient = vec3(0.1);
+    vec3 ambient = vec3(texture(ambientTexture, FragUV));
 
     for(int i = 0; i < 1; i++) {
         vec3 lightDir = normalize(lights[i].position - FragPos);
@@ -46,9 +50,9 @@ void main() {
         vec3 halfwayDir = normalize(lightDir + viewDir);
 
         //specular
-        float shininess = 32.0; // Höherer Wert = kleinerer, schärferer Glanzpunkt
+        float shininess = 32; // Höherer Wert = kleinerer, schärferer Glanzpunkt
         float spec = pow(max(dot(norm, halfwayDir), 0.0), shininess);
-        vec3 specular = spec * lights[i].color;
+        vec3 specular = spec * lights[i].color * vec3(texture(specularTexture, FragUV));
 
         // Diffuse
         float diff = max(dot(norm, lightDir), 0.0);

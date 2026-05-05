@@ -1,6 +1,7 @@
 package engine.rendering;
 
 import engine.lighting.PointLight;
+import engine.object.Material;
 import engine.object.Mesh;
 import engine.object.Texture;
 import engine.util.*;
@@ -102,9 +103,17 @@ public class RenderManager implements Runnable{
         );
 
         mainShader.setUniformBindCallback(((object, camera) -> {
-            if (object.getTexture() != null) {
-                object.getTexture().bind(10);
+            if (object.getMaterial().diffuseTexture() != null) {
+                object.getMaterial().diffuseTexture().bind(10);
                 mainShader.setUniform("diffuseTexture", 10);
+            }
+            if (object.getMaterial().ambientTexture() != null) {
+                object.getMaterial().ambientTexture().bind(11);
+                mainShader.setUniform("ambientTexture", 11);
+            }
+            if (object.getMaterial().specularTexture() != null) {
+                object.getMaterial().specularTexture().bind(12);
+                mainShader.setUniform("specularTexture", 12);
             }
 
             mainShader.setUniform("view", camera.getView());
@@ -115,7 +124,7 @@ public class RenderManager implements Runnable{
         List<PointLight> pointLights = new ArrayList<>();
 
         pointLights.add(new PointLight(
-                new Vector3f(2.0f, 4.0f, 2.0f),
+                new Vector3f(2.0f, 3.0f, 2.0f),
                 new Vector3f(1.0f, 1.0f, 1.0f),
                 1.0f
         ));
@@ -127,13 +136,21 @@ public class RenderManager implements Runnable{
         Mesh floorMesh = Loader.loadOBJ("src/main/resources/models/floor.obj");
 
         Texture CubeTexture = new Texture("src/main/resources/textures/Cube.png");
-        Texture FloorTexture = new Texture("src/main/resources/textures/floor.png");
+        Texture CubeAmbient = new Texture("src/main/resources/textures/Cube.ambient.png");
+        Texture CubeSpecular = new Texture("src/main/resources/textures/Cube.specular.png");
 
-        Object cube = new Object(cubeMesh, CubeTexture);
+        Material CubeMaterial = new Material(CubeTexture, CubeAmbient, CubeSpecular, null);
+
+        Texture FloorTexture = new Texture("src/main/resources/textures/floor.png");
+        Texture FloorAmbient = new Texture("src/main/resources/textures/Cube.ambient.png");
+
+        Material FloorMaterial = new Material(FloorTexture, CubeAmbient, CubeSpecular, null);
+
+        Object cube = new Object(cubeMesh, CubeMaterial);
         cube.getPosition().set(0, 0.5, 0);
         sceneObjects.add(cube);
 
-        Object floor = new Object(floorMesh, FloorTexture);
+        Object floor = new Object(floorMesh, FloorMaterial);
         floor.getPosition().set(0, 0, 0);
         floor.setScale(10.0f);
         sceneObjects.add(floor);

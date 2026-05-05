@@ -5,15 +5,15 @@ import org.joml.Vector3f;
 
 public class Object {
     private final Mesh mesh;
-    private final Texture texture;
+    private final Material material;
 
     private Vector3f position;
     private Vector3f rotation;
     private float scale;
 
-    public Object(Mesh mesh, Texture texture) {
+    public Object(Mesh mesh, Material material) {
         this.mesh = mesh;
-        this.texture = texture;
+        this.material = material;
 
         this.position = new Vector3f(0, 0, 0);
         this.rotation = new Vector3f(0, 0, 0);
@@ -34,5 +34,5 @@ public class Object {
     public Vector3f getPosition() { return position; }
     public Vector3f getRotation() { return rotation; }
     public void setScale(float scale) { this.scale = scale; }
-    public Texture getTexture() { return texture; }
+    public Material getMaterial() { return material; }
 }
