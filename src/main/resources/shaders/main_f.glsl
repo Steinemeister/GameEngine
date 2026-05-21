@@ -16,9 +16,6 @@ uniform Light lights[1];
 uniform float far_plane;
 
 uniform sampler2D diffuseTexture;
-uniform sampler2D ambientTexture;
-uniform sampler2D specularTexture;
-uniform sampler2D specularExponentTexture;
 
 
 float calculateShadow(vec3 fragPos, Light light) {
@@ -42,7 +39,7 @@ void main() {
     vec3 viewDir = normalize(viewPos - FragPos);
     vec3 totalLight = vec3(0.0);
 
-    vec3 ambient = vec3(texture(ambientTexture, FragUV));
+    vec3 ambient = vec3(0.1);
 
     for(int i = 0; i < 1; i++) {
         vec3 lightDir = normalize(lights[i].position - FragPos);
@@ -52,7 +49,7 @@ void main() {
         //specular
         float shininess = 32; // Höherer Wert = kleinerer, schärferer Glanzpunkt
         float spec = pow(max(dot(norm, halfwayDir), 0.0), shininess);
-        vec3 specular = spec * lights[i].color * vec3(texture(specularTexture, FragUV));
+        vec3 specular = spec * lights[i].color;
 
         // Diffuse
         float diff = max(dot(norm, lightDir), 0.0);
