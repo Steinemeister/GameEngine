@@ -32,6 +32,8 @@ public class VoxelChunk {
     private int texture3DId = 0; // Die ID der 3D-Textur auf der GPU
     private Mesh chunkMesh;      // Unser "leeres" oder instanziertes Mesh
 
+    private volatile boolean readyToUpload = false;
+
     public VoxelChunk(Vector3i dimensions, Vector3i chunkPosition) {
         this.dimensions = new Vector3i(dimensions);
         this.chunkPosition = new Vector3i(chunkPosition);
@@ -143,5 +145,12 @@ public class VoxelChunk {
 
     public void setMesh(Mesh mesh) {
         this.chunkMesh = mesh;
+    }
+
+    public boolean isReadyToUpload() {
+        return readyToUpload;
+    }
+    public void setReadyToUpload(boolean ready) {
+        this.readyToUpload = ready;
     }
 }

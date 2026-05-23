@@ -9,7 +9,7 @@ public class Camera {
 
     private Vector3f position = new Vector3f(0, 0, 5);
     private float yaw = -90f, pitch = 0f;
-    private float baseSpeed = 5.0f, sensitivity = 13.0f;
+    private float baseSpeed = 20.0f, sensitivity = 5.0f;
 
     public void update(float aspectRatio) {
         projection.setPerspective((float) Math.toRadians(45.0f), aspectRatio, Constants.ZNear, Constants.ZFar);

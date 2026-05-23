@@ -10,6 +10,7 @@ import engine.world.Level;
 import engine.world.VoxelChunk;
 import logger.Logger;
 import logger.LoggerFactory;
+import org.joml.FrustumIntersection;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
@@ -113,28 +114,12 @@ public class RenderManager implements Runnable {
         ));
 
         Level level = new Level(new Vector3i(16, 16, 16));
-
-        // Ausdehnung der generierten Welt beim Start
-        int worldRadiusX = 2;
-        int worldRadiusZ = 2;
-        int worldHeightY = 2;
-
-        for (int cx = -worldRadiusX; cx <= worldRadiusX; cx++) {
-            for (int cz = -worldRadiusZ; cz <= worldRadiusZ; cz++) {
-                for (int cy = 0; cy < worldHeightY; cy++) {
-                    VoxelChunk chunk = level.loadChunk(cx, cy, cz);
-                    level.generateTerrainForChunk(chunk);
-                }
-            }
-        }
-
-        level.generateAllMeshes();
-
-        for (VoxelChunk chunk : level.getActiveChunks().values()) {
-            chunk.update3DTexture();
-        }
-
         Camera camera = new Camera();
+
+        // NEU: Initialer Aufruf mit der Startposition der Kamera und Sichtradius (z.B. 4 Chunks weit)
+        int viewRadius = 5;
+        level.updateVisibleChunks(camera.getPosition(), viewRadius);
+
         InputManager input = new InputManager(window);
         lastFrameTime = glfwGetTime();
 
@@ -145,20 +130,24 @@ public class RenderManager implements Runnable {
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
 
-            // Licht sanft kreisen lassen für dynamische Helligkeitswechsel auf den Blöcken
             pointLights.get(0).position.rotateAxis((float) Math.toRadians(deltaTime * 15), 0.0f, 1.0f, 0.0f);
 
             camera.handleInput(input, deltaTime);
             camera.update(aspectRatio);
 
-            // Nur noch der Haupt-Renderpass, direkt auf das Fenster
+            // 1. Chunks um die Kamera herum im Hintergrund anfordern
+            level.updateVisibleChunks(camera.getPosition(), viewRadius);
+
+            // 2. NEU: Fertig berechnete Hintergrund-Chunks stoßfrei auf die GPU laden
+            level.uploadPendingTextures();
+
             glViewport(0, 0, width, height);
             glEnable(GL_DEPTH_TEST);
             glDepthMask(true);
             glDepthFunc(GL_LESS);
 
-            // Level mit dem kreisenden Licht auf den Bildschirm zeichnen
-            renderLevel(level, mainShader, camera, textureAtlas, pointLights.getFirst().position);
+            // 3. Zeichnen (Nutzt jetzt das blitzschnelle Frustum Culling)
+            renderLevel(level, mainShader, camera, textureAtlas, pointLights.get(0).position);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
@@ -169,22 +158,16 @@ public class RenderManager implements Runnable {
     }
 
     private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture, Vector3f lightPosition) {
-        // 1. Haupt-Shader aktivieren
         pipeline.bind();
 
-        // 2. Uniforms für die Textur-Einheiten im Shader fest verdrahten
         pipeline.setUniform("textureAtlas", 0);
         pipeline.setUniform("voxelTex3D", 1);
 
-        // 3. Den 2D-Texturatlas an Textureinheit 0 binden
         glActiveTexture(GL_TEXTURE0);
         if (atlasTexture != null) {
             atlasTexture.bind(0);
-        } else {
-            glBindTexture(GL_TEXTURE_2D, 0);
         }
 
-        // 4. Kamera-Matrizen und Lichtposition übertragen
         if (camera != null) {
             pipeline.setUniform("view", camera.getView());
             pipeline.setUniform("projection", camera.getProjection());
@@ -192,33 +175,45 @@ public class RenderManager implements Runnable {
             pipeline.setUniform("lightPos", lightPosition);
         }
 
-        // 5. Model-Matrix setzen (Identitätsmatrix, da Weltkoordinaten im Mesh stecken)
         org.joml.Matrix4f identityMatrix = new org.joml.Matrix4f();
         pipeline.setUniform("model", identityMatrix);
 
-        // 6. Über alle geladenen Chunks iterieren und prozedural rendern
-        for (VoxelChunk chunk : level.getActiveChunks().values()) {
-            org.joml.Vector3i cPos = chunk.getChunkPosition();
-            org.joml.Vector3i dims = chunk.getDimensions();
+        // --- NEU: Sichtkegel (Frustum) aus der Kamera-Kombination berechnen ---
+        org.joml.Matrix4f vpMatrix = new org.joml.Matrix4f(camera.getProjection()).mul(camera.getView());
+        FrustumIntersection frustum = new FrustumIntersection(vpMatrix);
 
-            // Chunk-spezifische Positionsdaten an den Shader senden
-            pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(cPos.x * dims.x, cPos.y * dims.y, cPos.z * dims.z));
+        Vector3i dims = level.getChunkDimensions();
+
+        for (VoxelChunk chunk : level.getActiveChunks().values()) {
+            // Nur rendern, wenn der Chunk fertig generiert ist
+            Mesh chunkMesh = chunk.getMesh();
+            if (chunkMesh == null || chunkMesh.vertexCount() == 0) continue;
+
+            // Welt-Position des Chunks für den Sichtbarkeitstest bestimmen
+            Vector3i cPos = chunk.getChunkPosition();
+            float minX = cPos.x * dims.x;
+            float minY = cPos.y * dims.y;
+            float minZ = cPos.z * dims.z;
+            float maxX = minX + dims.x;
+            float maxY = minY + dims.y;
+            float maxZ = minZ + dims.z;
+
+            // FRUSTUM CULLING: Wenn der Chunk komplett außerhalb des Sichtfelds ist -> Überspringen!
+            if (frustum.intersectAab(minX, minY, minZ, maxX, maxY, maxZ) == FrustumIntersection.OUTSIDE) {
+                continue;
+            }
+
+            // Chunk-spezifische Uniforms setzen und zeichnen
+            pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(minX, minY, minZ));
             pipeline.setUniform("chunkDimensions", dims);
 
-            // Die 3D-Textur dieses Chunks an Textureinheit 1 binden
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_3D, chunk.getTexture3DId());
 
-            // Das Dummy-VAO binden und via glDrawArrays die Vertices simulieren
-            Mesh chunkMesh = chunk.getMesh();
-            if (chunkMesh != null && chunkMesh.vertexCount() > 0) {
-                glBindVertexArray(chunkMesh.vao());
-                glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
-                glBindVertexArray(0);
-            }
+            glBindVertexArray(chunkMesh.vao());
+            glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
+            glBindVertexArray(0);
         }
-
-        // Sauberes OpenGL-State-Management: Zurück auf Standard-Einheit 0
         glActiveTexture(GL_TEXTURE0);
     }
 }

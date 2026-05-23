@@ -6,19 +6,25 @@ import org.joml.Vector3i;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class Level {
     private final Vector3i chunkDimensions;
+
+    // Thread-sichere Map für Chunks, da der Hintergrund-Thread darauf zugreift
     private final Map<Vector3i, VoxelChunk> activeChunks;
+
+    // Thread-Pool für die Hintergrund-Berechnung (Nutzt so viele Threads wie CPU-Kerne vorhanden sind)
+    private final ExecutorService threadPool;
 
     public Level(Vector3i chunkDimensions) {
         this.chunkDimensions = new Vector3i(chunkDimensions);
-        this.activeChunks = new HashMap<>();
+        this.activeChunks = new ConcurrentHashMap<>();
+        this.threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     }
 
-    /**
-     * Erstellt einen Chunk an der Grid-Position (cx, cy, cz), falls er noch nicht existiert.
-     */
     public VoxelChunk loadChunk(int cx, int cy, int cz) {
         Vector3i pos = new Vector3i(cx, cy, cz);
         if (activeChunks.containsKey(pos)) {
@@ -30,75 +36,8 @@ public class Level {
     }
 
     /**
-     * Entlädt einen Chunk und gibt seine GPU-Texturen frei.
-     */
-    public void unloadChunk(int cx, int cy, int cz) {
-        Vector3i key = new Vector3i(cx, cy, cz);
-        VoxelChunk chunk = activeChunks.remove(key);
-        if (chunk != null) {
-            chunk.cleanup();
-        }
-    }
-
-    /**
-     * Setzt eine Block-ID über globale Weltkoordinaten und aktualisiert die GPU-Textur sofort.
-     */
-    public void setVoxelAtWorld(Vector3f worldPos, byte blockId) {
-        Vector3i chunkKey = new Vector3i();
-        VoxelChunk.getChunkPositionFromWorld(worldPos, chunkDimensions, chunkKey);
-        VoxelChunk chunk = activeChunks.get(chunkKey);
-
-        if (chunk != null) {
-            Vector3i localPos = new Vector3i();
-            chunk.worldToLocalCoordinate(worldPos, localPos);
-            chunk.setVoxel(localPos.x, localPos.y, localPos.z, blockId);
-
-            // WICHTIG: Die 3D-Textur des Chunks neu auf die GPU hochladen
-            chunk.update3DTexture();
-        }
-    }
-
-    /**
-     * Gibt die Block-ID an einer globalen Weltkoordinate zurück.
-     * Gibt 0 (Luft) zurück, falls der betroffene Chunk nicht geladen ist.
-     */
-    public byte getVoxelAtWorld(Vector3f worldPos) {
-        Vector3i chunkKey = new Vector3i();
-        VoxelChunk.getChunkPositionFromWorld(worldPos, chunkDimensions, chunkKey);
-        VoxelChunk chunk = activeChunks.get(chunkKey);
-
-        if (chunk != null) {
-            Vector3i localPos = new Vector3i();
-            chunk.worldToLocalCoordinate(worldPos, localPos);
-            return chunk.getVoxel(localPos.x, localPos.y, localPos.z);
-        }
-        return 0; // Luft als Fallback
-    }
-
-    /**
-     * Interaktions-Methode: Ändert einen Voxel und zwingt die GPU zur Textur-Aktualisierung.
-     * (Ersetzt die alte setVoxelAndRefresh-Methode)
-     */
-    public void setVoxelAndRefresh(Vector3f worldPos, byte blockId) {
-        setVoxelAtWorld(worldPos, blockId);
-    }
-
-    /**
-     * Generiert die initialen Dummy-Meshes und lädt die 3D-Texturen für alle Chunks hoch.
-     */
-    public void generateAllMeshes() {
-        for (VoxelChunk chunk : activeChunks.values()) {
-            // Generiert das Dummy-Mesh (Sagt der GPU nur, wie viele Vertices simuliert werden sollen)
-            Mesh dummyMesh = ChunkMeshGenerator.generateMesh(chunk, this);
-            chunk.setMesh(dummyMesh);
-
-            // Übermittelt das Voxel-Byte-Array als 3D-Textur an die Grafikkarte
-            chunk.update3DTexture();
-        }
-    }
-
-    /**
-     * Dynamisches Laden/Entladen von Chunks im Radius um eine Weltposition (z.B. den Spieler).
+     * Scannt die Welt im 3D-Radius ab und lagert die rechenintensive Generierung
+     * auf Hintergrund-Threads aus.
      */
     public void updateVisibleChunks(Vector3f centerWorldPos, int viewRadius) {
         Vector3i centerChunk = new Vector3i();
@@ -114,120 +53,66 @@ public class Level {
                     int cz = centerChunk.z + z;
 
                     Vector3i chunkKey = new Vector3i(cx, cy, cz);
-
                     VoxelChunk chunk = activeChunks.get(chunkKey);
+
                     if (chunk == null) {
-                        chunk = new VoxelChunk(chunkDimensions, chunkKey);
+                        // Chunk leer erzeugen und sofort in die Map eintragen
+                        VoxelChunk newChunk = new VoxelChunk(chunkDimensions, chunkKey);
+                        activeChunks.put(chunkKey, newChunk);
+                        chunk = newChunk;
+
+                        // Die schwere Perlin-Noise Arbeit in den Hintergrund-Thread auslagern!
+                        threadPool.submit(() -> {
+                            generateTerrainForChunk(newChunk);
+                            // Flag setzen, dass der Chunk bereit für OpenGL ist
+                            newChunk.setReadyToUpload(true);
+                        });
                     }
+
                     newActiveChunks.put(chunkKey, chunk);
                 }
             }
         }
 
-        // Alle Chunks, die aus dem Sichtradius fliegen, sauber löschen (GPU-Speicher freigeben!)
+        // Ausgelaufene Chunks löschen
         for (Map.Entry<Vector3i, VoxelChunk> entry : activeChunks.entrySet()) {
             if (!newActiveChunks.containsKey(entry.getKey())) {
-                entry.getValue().cleanup();
+                VoxelChunk removed = activeChunks.remove(entry.getKey());
+                if (removed != null) removed.cleanup();
             }
         }
-
-        activeChunks.clear();
-        activeChunks.putAll(newActiveChunks);
     }
 
     /**
-     * Gibt alle nativen Texturen und VAOs der Chunks im Grafikspeicher frei.
+     * Diese Methode läuft auf dem Haupt-Thread im Render-Loop. Sie prüft, welche
+     * Hintergrund-Chunks fertig sind und lädt deren Texturen/VAOs stoßfrei auf die GPU.
      */
-    public void cleanup() {
+    public void uploadPendingTextures() {
         for (VoxelChunk chunk : activeChunks.values()) {
-            chunk.cleanup();
-        }
-        activeChunks.clear();
-    }
-
-    // --- Hilfsklasse für den Strahlentest (Raycasting) ---
-    public record RaycastResult(Vector3i blockPos, Vector3i faceNormal) {}
-
-    /**
-     * DDA-Algorithmus zur Erkennung, welcher Block anvisiert wird.
-     */
-    public RaycastResult raycast(Vector3f origin, Vector3f direction, float maxDistance) {
-        Vector3f dir = new Vector3f(direction).normalize();
-
-        int x = (int) Math.floor(origin.x);
-        int y = (int) Math.floor(origin.y);
-        int z = (int) Math.floor(origin.z);
-
-        int stepX = (dir.x > 0) ? 1 : ((dir.x < 0) ? -1 : 0);
-        int stepY = (dir.y > 0) ? 1 : ((dir.y < 0) ? -1 : 0);
-        int stepZ = (dir.z > 0) ? 1 : ((dir.z < 0) ? -1 : 0);
-
-        float tMaxX = (stepX > 0) ? (float)(Math.floor(origin.x) + 1 - origin.x) / dir.x : (float)(origin.x - Math.floor(origin.x)) / -dir.x;
-        float tMaxY = (stepY > 0) ? (float)(Math.floor(origin.y) + 1 - origin.y) / dir.y : (float)(origin.y - Math.floor(origin.y)) / -dir.y;
-        float tMaxZ = (stepZ > 0) ? (float)(Math.floor(origin.z) + 1 - origin.z) / dir.z : (float)(origin.z - Math.floor(origin.z)) / -dir.z;
-
-        float tDeltaX = (stepX != 0) ? 1.0f / Math.abs(dir.x) : Float.MAX_VALUE;
-        float tDeltaY = (stepY != 0) ? 1.0f / Math.abs(dir.y) : Float.MAX_VALUE;
-        float tDeltaZ = (stepZ != 0) ? 1.0f / Math.abs(dir.z) : Float.MAX_VALUE;
-
-        Vector3f currentWorldPos = new Vector3f();
-        Vector3i lastFaceNormal = new Vector3i(0, 0, 0);
-
-        float t = 0;
-        while (t < maxDistance) {
-            currentWorldPos.set(x, y, z);
-
-            // Wenn die ID an dieser Position ungleich 0 (Luft) ist, haben wir einen Block getroffen!
-            if (getVoxelAtWorld(currentWorldPos) > 0) {
-                return new RaycastResult(new Vector3i(x, y, z), lastFaceNormal);
-            }
-
-            if (tMaxX < tMaxY) {
-                if (tMaxX < tMaxZ) {
-                    t = tMaxX;
-                    tMaxX += tDeltaX;
-                    x += stepX;
-                    lastFaceNormal.set(-stepX, 0, 0);
-                } else {
-                    t = tMaxZ;
-                    tMaxZ += tDeltaZ;
-                    z += stepZ;
-                    lastFaceNormal.set(0, 0, -stepZ);
-                }
-            } else {
-                if (tMaxY < tMaxZ) {
-                    t = tMaxY;
-                    tMaxY += tDeltaY;
-                    y += stepY;
-                    lastFaceNormal.set(0, -stepY, 0);
-                } else {
-                    t = tMaxZ;
-                    tMaxZ += tDeltaZ;
-                    z += stepZ;
-                    lastFaceNormal.set(0, 0, -stepZ);
-                }
+            // Wenn der Noise fertig ist, aber das Mesh/die Textur noch fehlt
+            if (chunk.isReadyToUpload() && chunk.getMesh() == null) {
+                Mesh dummyMesh = ChunkMeshGenerator.generateMesh(chunk, this);
+                chunk.setMesh(dummyMesh);
+                chunk.update3DTexture();
+                chunk.setReadyToUpload(false); // Fertig hochgeladen
             }
         }
-        return null;
     }
 
     public void generateTerrainForChunk(VoxelChunk chunk) {
-        org.joml.Vector3i chunkPos = chunk.getChunkPosition();
-        org.joml.Vector3i dims = chunk.getDimensions();
+        Vector3i chunkPos = chunk.getChunkPosition();
+        Vector3i dims = chunk.getDimensions();
 
-        // Welt-Offsets berechnen
         int worldXOffset = chunkPos.x * dims.x;
         int worldZOffset = chunkPos.z * dims.z;
         int worldYOffset = chunkPos.y * dims.y;
 
-        // Einstellungen für den Noise
-        float frequency = 0.03f; // Höher = mehr Hügel auf engem Raum, Niedriger = flachere, weite Landschaft
-        float maxMountainHeight = 24.0f; // Maximale Höhe der Berge in Blöcken
-        float baseWaterLevel = 4.0f;     // Eine flache Mindesthöhe des Bodens
+        float frequency = 0.015f; // Frequenz halbiert für majestätischere, größere Berge bei hoher Sichtweite
+        float maxMountainHeight = 40.0f; // Höhere Berge passend zur Render Distance
+        float baseWaterLevel = -10.0f;
 
         for (int x = 0; x < dims.x; x++) {
             for (int z = 0; z < dims.z; z++) {
-                // Globale Weltkoordinaten auf der horizontalen Ebene bestimmen
                 float globalX = worldXOffset + x;
                 float globalZ = worldZOffset + z;
 
@@ -236,26 +121,33 @@ public class Level {
 
                 for (int y = 0; y < dims.y; y++) {
                     int globalY = worldYOffset + y;
-
                     byte blockId = 0;
 
                     if (globalY <= targetHeight) {
                         if (globalY == targetHeight) {
-                            blockId = 1; // Oberste Schicht: Gras (Kachel 03_)
+                            blockId = 1; // Gras
                         } else if (globalY > targetHeight - 4) {
-                            blockId = 2; // Die nächsten 3 Schichten darunter: Erde (Kachel 02_)
+                            blockId = 2; // Erde
                         } else {
-                            blockId = 3; // Alles tief im Boden: Stein (Kachel 01_)
+                            blockId = 3; // Stein
                         }
                     }
-
                     chunk.setVoxel(x, y, z, blockId);
                 }
             }
         }
     }
 
-    // --- Getters ---
+    public void generateAllMeshes() { /* Unused, da asynchron geladen wird */ }
+
+    public void cleanup() {
+        threadPool.shutdownNow(); // Threads beenden
+        for (VoxelChunk chunk : activeChunks.values()) {
+            chunk.cleanup();
+        }
+        activeChunks.clear();
+    }
+
     public Map<Vector3i, VoxelChunk> getActiveChunks() { return activeChunks; }
     public Vector3i getChunkDimensions() { return chunkDimensions; }
 }
