@@ -95,6 +95,8 @@ public class RenderManager implements Runnable {
     private void loop() {
         logger.info("starting rendering loop");
 
+        TextureAtlasGenerator.generateAtlas(1);
+
         ShaderPipeline shadowShader = new ShaderPipeline(
                 "src/main/resources/shaders/shadow_v.glsl",
                 "src/main/resources/shaders/shadow_f.glsl",
@@ -108,14 +110,8 @@ public class RenderManager implements Runnable {
         );
 
         // Textur für das gesamte Voxel-Level laden
-        Texture levelTexture = new Texture("src/main/resources/textures/Cube.png");
-        Material levelMaterial = new Material(levelTexture);
+        Texture textureAtlas = new Texture("src/main/generated/textureAtlas.png");
 
-        // Da wir sceneObjects entfernt haben, binden wir die Level-Textur direkt im Loop manuell,
-        // um Konflikte mit dem alten Callback-Interface zu vermeiden.
-        mainShader.setUniformBindCallback(((object, camera) -> {
-            // Unused, da wir keine separaten Szene-Objekte mehr rendern
-        }));
 
         List<PointLight> pointLights = new ArrayList<>();
         pointLights.add(new PointLight(
@@ -124,12 +120,28 @@ public class RenderManager implements Runnable {
                 1.0f
         ));
 
-        // NEU: Level mit z.B. 16x16x16 Chunk-Dimensionen initialisieren
         Level level = new Level(new Vector3i(16, 16, 16));
 
-        // Test-Generierung: Ein paar Beispiel-Chunks laden und befüllen
-        VoxelChunk chunk0 = level.loadChunk(0, 0, 0);
-        chunk0.fill(); // Macht den ersten Chunk komplett solide
+        int worldRadiusX = 2;
+        int worldRadiusZ = 2;
+        int worldHeightY = 2;
+
+        for (int cx = -worldRadiusX; cx <= worldRadiusX; cx++) {
+            for (int cz = -worldRadiusZ; cz <= worldRadiusZ; cz++) {
+                for (int cy = 0; cy < worldHeightY; cy++) {
+
+                    VoxelChunk chunk = level.loadChunk(cx, cy, cz);
+
+                    level.generateTerrainForChunk(chunk);
+                }
+            }
+        }
+
+        level.generateAllMeshes();
+
+        for (VoxelChunk chunk : level.getActiveChunks().values()) {
+            chunk.update3DTexture();
+        }
 
         Camera camera = new Camera();
         InputManager input = new InputManager(window);
@@ -157,7 +169,7 @@ public class RenderManager implements Runnable {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             // Level auf den Bildschirm zeichnen
-            renderLevel(level, mainShader, camera, levelMaterial);
+            renderLevel(level, mainShader, camera, textureAtlas);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
@@ -237,43 +249,51 @@ public class RenderManager implements Runnable {
         };
     }
 
-    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Material material) {
+//    glEnable(GL_DEPTH_TEST);
+//    glDepthMask(true);
+//    glDepthFunc(GL_LESS);
+
+    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture) {
 
         //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-
-        glEnable(GL_DEPTH_TEST);
-        glDepthMask(true);
-        glDepthFunc(GL_LESS);
-
-        // 1. Shader-Programm aktivieren
         pipeline.bind();
 
+        pipeline.setUniform("textureAtlas", 0); // Verknüpft sampler2D textureAtlas mit GL_TEXTURE0
+        pipeline.setUniform("voxelTex3D", 1);
 
-        // 2. Material-Textur an Slot 10 binden (analog zu deinem alten Shader-Callback)
-        if (material != null && material.diffuseTexture() != null) {
-            material.diffuseTexture().bind(10);
-            pipeline.setUniform("diffuseTexture", 10);
+        if (atlasTexture != null) {
+            glActiveTexture(GL_TEXTURE0);
+            atlasTexture.bind(0);
+            pipeline.setUniform("textureAtlas", 0);
         }
 
-        // 3. Kamera-Matrizen an den Shader übertragen (falls vorhanden, z.B. nicht im Shadow-Pass)
+
         if (camera != null) {
             pipeline.setUniform("view", camera.getView());
             pipeline.setUniform("projection", camera.getProjection());
-            pipeline.setUniform("far_plane", Constants.ZFar);
         }
 
-        // 4. Model-Matrix setzen. Da der ChunkMeshGenerator die Welt-Koordinaten der
-        // Blöcke bereits direkt in die Vertices einrechnet, nutzen wir hier eine Identitätsmatrix.
-        org.joml.Matrix4f identityModelMatrix = new org.joml.Matrix4f();
-        pipeline.setUniform("model", identityModelMatrix);
-
-        // 5. Über alle geladenen Chunks iterieren und deren Grafik-Mesh zeichnen
+        // 2. Über alle Chunks iterieren
         for (VoxelChunk chunk : level.getActiveChunks().values()) {
-            Mesh chunkMesh = chunk.getMesh();
 
-            // Nur rendern, wenn der Chunk ein gültiges Mesh besitzt und nicht komplett leer ist
-            if (chunkMesh != null && chunkMesh.vertexCount() > 0) {
-                chunkMesh.render();
+            // Welt-Offset und Dimensionen des spezifischen Chunks übergeben
+            org.joml.Vector3i cPos = chunk.getChunkPosition();
+            org.joml.Vector3i dims = chunk.getDimensions();
+            pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(cPos.x * dims.x, cPos.y * dims.y, cPos.z * dims.z));
+            pipeline.setUniform("chunkDimensions", dims);
+
+            // 3. Die einzigartige 3D-Textur dieses Chunks an Slot 1 binden
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_3D, chunk.getTexture3DId());
+            pipeline.setUniform("voxelTex3D", 1);
+
+            // 4. Das Dummy-VAO binden und über glDrawArrays rendern (keine Indices nötig!)
+            Mesh chunkMesh = chunk.getMesh();
+            if (chunkMesh != null) {
+                glBindVertexArray(chunkMesh.vao());
+                // Wir zeichnen rein über die im Shader berechnete Vertex-Anzahl!
+                glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
+                glBindVertexArray(0);
             }
         }
     }

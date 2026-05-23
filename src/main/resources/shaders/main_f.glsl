@@ -1,64 +1,40 @@
 #version 330 core
-
 out vec4 FragColor;
 
 in vec3 FragPos;
 in vec2 TexCoords;
 in vec3 Normal;
+flat in uint BlockID;
 
-struct PointLight {
-    vec3 position;
-    vec3 color;
-    samplerCube shadowMap;
-};
-
-#define MAX_LIGHTS 1 // Passe dies an die Anzahl deiner Lichter an
-
-uniform PointLight lights[MAX_LIGHTS];
-uniform sampler2D diffuseTexture;
-uniform float far_plane;
-
-// Funktion zur Berechnung des Schattens für eine Cube Map
-float ShadowCalculation(vec3 fragPos, PointLight light) {
-    vec3 fragToLight = fragPos - light.position;
-
-    // Den nächstgelegenen Tiefenwert aus der Shadow Map auslesen
-    float closestDepth = texture(light.shadowMap, fragToLight).r;
-
-    // Den Wert wieder in den echten Abstand (Weltkoordinaten) umrechnen
-    closestDepth *= far_plane;
-
-    // Aktueller Abstand zwischen Fragment und Licht
-    float currentDepth = length(fragToLight);
-
-    // Ein kleiner Bias verhindert "Shadow Acne" (Musterbildung auf Oberflächen)
-    float bias = 0.05;
-    float shadow = currentDepth - bias > closestDepth ? 1.0 : 0.0;
-
-    return shadow;
-}
+uniform sampler2D textureAtlas;
+uniform vec3 lightPos;
 
 void main() {
-    vec3 color = texture(diffuseTexture, TexCoords).rgb;
+    // 1. Die Raster-Größe deines Atlasses definieren (4x4 = 4.0)
+    float atlasSize = 4.0;
+
+    // 2. BlockID zu einem nullbasierten Index konvertieren (Luft = 0 wird im Vertex-Shader verworfen)
+    int atlasIndex = int(BlockID) - 1;
+    if (atlasIndex < 0) atlasIndex = 0;
+
+    // 3. Berechne die Spalte (U) und Zeile (V) im Atlas-Raster
+    float uOffset = float(atlasIndex % 4) / atlasSize;
+    float vOffset = float(atlasIndex / 4) / atlasSize;
+
+    // 4. Skaliere die 0-1 Koordinate auf 1/4 der Größe und addiere den Offset
+    // Wichtig: In OpenGL liegt der Textur-Ursprung (0,0) unten links!
+    // Falls deine Textur auf dem Kopf steht, ändern wir das '+' bei vOffset später zu einem '-'
+    vec2 atlasTexCoords = (TexCoords / atlasSize) + vec2(uOffset, vOffset);
+
+    // 5. Farbe aus dem Atlas-Ausschnitt lesen
+    vec3 texColor = texture(textureAtlas, atlasTexCoords).rgb;
+
+    // --- Deine funktionierende Beleuchtung ---
+    vec3 ambient = 0.2 * texColor;
     vec3 normal = normalize(Normal);
+    vec3 lightDir = normalize(lightPos - FragPos);
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 diffuse = diff * vec3(1.0);
 
-    // Ambienter Lichtanteil (Grundbeleuchtung)
-    vec3 ambient = 0.15 * color;
-
-    vec3 lighting = vec3(0.0);
-
-    for(int i = 0; i < MAX_LIGHTS; i++) {
-        // Diffuser Lichtanteil
-        vec3 lightDir = normalize(lights[i].position - FragPos);
-        float diff = max(dot(normal, lightDir), 0.0);
-        vec3 diffuse = diff * lights[i].color;
-
-        // Schatten berechnen
-        float shadow = ShadowCalculation(FragPos, lights[i]);
-
-        // Diffusen Anteil mit Schatten verrechnen (wenn shadow == 1, bleibt nur Ambient)
-        lighting += (ambient + (1.0 - shadow) * diffuse) * color;
-    }
-
-    FragColor = vec4(lighting, 1.0);
+    FragColor = vec4(ambient + diffuse * texColor, 1.0);
 }

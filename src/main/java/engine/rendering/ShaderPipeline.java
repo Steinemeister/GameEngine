@@ -7,6 +7,7 @@ import logger.Logger;
 import logger.LoggerFactory;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
+import org.joml.Vector3i;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.system.MemoryStack;
 
@@ -86,6 +87,10 @@ public class ShaderPipeline {
             if (loc == -1) System.err.println("Warnung: Uniform '" + k + "' nicht gefunden!");
             return loc;
         });
+    }
+
+    public void setUniform(String name, Vector3i value) {
+        glUniform3i(getUniformLocation(name), value.x, value.y, value.z);
     }
 
     public void setUniform(String name, Matrix4f value) {

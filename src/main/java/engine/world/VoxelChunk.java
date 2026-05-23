@@ -3,65 +3,111 @@ package engine.world;
 import engine.object.Mesh;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
-import org.joml.primitives.AABBf;
+import org.lwjgl.BufferUtils;
 
-import java.util.BitSet;
+import java.nio.ByteBuffer;
+
+import static org.lwjgl.opengl.GL11.GL_NEAREST;
+import static org.lwjgl.opengl.GL11.GL_TEXTURE_MAG_FILTER;
+import static org.lwjgl.opengl.GL11.GL_TEXTURE_MIN_FILTER;
+import static org.lwjgl.opengl.GL11.GL_TEXTURE_WRAP_S;
+import static org.lwjgl.opengl.GL11.GL_TEXTURE_WRAP_T;
+import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
+import static org.lwjgl.opengl.GL11.glBindTexture;
+import static org.lwjgl.opengl.GL11.glDeleteTextures;
+import static org.lwjgl.opengl.GL11.glGenTextures;
+import static org.lwjgl.opengl.GL11.glTexParameteri;
+import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
+import static org.lwjgl.opengl.GL12.GL_TEXTURE_3D;
+import static org.lwjgl.opengl.GL12.GL_TEXTURE_WRAP_R;
+import static org.lwjgl.opengl.GL12.glTexImage3D;
+import static org.lwjgl.opengl.GL30.GL_R8UI;
+import static org.lwjgl.opengl.GL30.GL_RED_INTEGER;
 
 public class VoxelChunk {
     private final Vector3i dimensions;
     private final Vector3i chunkPosition;
-    private final BitSet voxels;
-    private final AABBf bounds;
-    private final Level level;
-    private Mesh mesh;
+    private final byte[] voxels; // Speichert Block-IDs (0 = Luft, 1 = Stein, 2 = Gras, etc.)
 
-    public VoxelChunk(Vector3i dimensions, Vector3i chunkPosition, Level level) {
+    private int texture3DId = 0; // Die ID der 3D-Textur auf der GPU
+    private Mesh chunkMesh;      // Unser "leeres" oder instanziertes Mesh
+
+    public VoxelChunk(Vector3i dimensions, Vector3i chunkPosition) {
         this.dimensions = new Vector3i(dimensions);
         this.chunkPosition = new Vector3i(chunkPosition);
-        this.level = level;
-
-        int totalVoxels = dimensions.x * dimensions.y * dimensions.z;
-        this.voxels = new BitSet(totalVoxels);
-
-        float minX = chunkPosition.x * dimensions.x;
-        float minY = chunkPosition.y * dimensions.y;
-        float minZ = chunkPosition.z * dimensions.z;
-        this.bounds = new AABBf(
-                minX, minY, minZ,
-                minX + dimensions.x, minY + dimensions.y, minZ + dimensions.z
-        );
-
-        this.reGenMesh();
-    }
-
-    public void reGenMesh() {
-        if (this.mesh != null) {
-            this.mesh.cleanup();
-        }
-        this.mesh = ChunkMeshGenerator.generateMesh(this, level);
+        this.voxels = new byte[dimensions.x * dimensions.y * dimensions.z];
     }
 
     private int getIndex(int x, int y, int z) {
-        if (!isLocalCoordinateInBounds(x, y, z)) {
-            throw new IndexOutOfBoundsException("Local voxel coordinate out of bounds.");
-        }
         return x + (y * dimensions.x) + (z * dimensions.x * dimensions.y);
     }
 
-
-    public void setVoxel(int x, int y, int z, boolean active) {
-        voxels.set(getIndex(x, y, z), active);
-        this.reGenMesh();
+    public void setVoxel(int x, int y, int z, byte blockId) {
+        if (x >= 0 && x < dimensions.x && y >= 0 && y < dimensions.y && z >= 0 && z < dimensions.z) {
+            voxels[getIndex(x, y, z)] = blockId;
+        }
     }
 
-    public boolean getVoxel(int x, int y, int z) {
-        return voxels.get(getIndex(x, y, z));
+    public byte getVoxel(int x, int y, int z) {
+        if (x >= 0 && x < dimensions.x && y >= 0 && y < dimensions.y && z >= 0 && z < dimensions.z) {
+            return voxels[getIndex(x, y, z)];
+        }
+        return 0; // Luft außerhalb der Grenzen
     }
 
-    // --- Coordinate Transformation Helpers ---
+    public void fill(byte blockId) {
+        java.util.Arrays.fill(voxels, blockId);
+    }
 
     /**
-     * Converts a global world position into a local voxel coordinate inside this chunk.
+     * Lädt die Voxel-Daten als 3D-Textur direkt auf die GPU hoch.
+     */
+    public void update3DTexture() {
+        if (texture3DId == 0) {
+            texture3DId = glGenTextures();
+        }
+
+        glBindTexture(GL_TEXTURE_3D, texture3DId);
+
+        // Parameter für exakte Block-Kanten (keine Filterung/Glättung zwischen Blöcken)
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+        // Daten in einen Byte-Buffer kopieren
+        ByteBuffer buffer = BufferUtils.createByteBuffer(voxels.length);
+        buffer.put(voxels);
+        buffer.flip();
+
+        // Als R8UI (8-Bit Unsigned Integer, Single Channel) spezifizieren
+        glTexImage3D(
+                GL_TEXTURE_3D,
+                0,
+                GL_R8UI,            // 1. Internes GPU-Format: Unsigned Integer
+                dimensions.x,
+                dimensions.y,
+                dimensions.z,
+                0,
+                GL_RED_INTEGER,     // 2. Format der Java-Daten: Wichtig ist das _INTEGER!
+                GL_UNSIGNED_BYTE,   // 3. Datentyp: byte
+                buffer
+        );
+
+        glBindTexture(GL_TEXTURE_3D, 0);
+    }
+
+    public static Vector3i getChunkPositionFromWorld(Vector3f worldPos, Vector3i chunkDimensions, Vector3i outChunkPos) {
+        outChunkPos.x = (int) Math.floor(worldPos.x / chunkDimensions.x);
+        outChunkPos.y = (int) Math.floor(worldPos.y / chunkDimensions.y);
+        outChunkPos.z = (int) Math.floor(worldPos.z / chunkDimensions.z);
+        return outChunkPos;
+    }
+
+    /**
+     * Wandelt eine globale Weltposition in eine lokale Voxel-Koordinate (0 bis Dimension-1)
+     * innerhalb dieses spezifischen Chunks um.
      */
     public Vector3i worldToLocalCoordinate(Vector3f worldPos, Vector3i outLocalPos) {
         int worldX = (int) Math.floor(worldPos.x);
@@ -74,90 +120,28 @@ public class VoxelChunk {
         return outLocalPos;
     }
 
-    /**
-     * Converts a local voxel coordinate into a global world coordinate system.
-     */
-    public Vector3f localToWorldPosition(int x, int y, int z, Vector3f outWorldPos) {
-        outWorldPos.x = (chunkPosition.x * dimensions.x) + x;
-        outWorldPos.y = (chunkPosition.y * dimensions.y) + y;
-        outWorldPos.z = (chunkPosition.z * dimensions.z) + z;
-        return outWorldPos;
+    public int getTexture3DId() {
+        return texture3DId;
     }
-
-    // --- Bounds and Neighbor Checking Helpers ---
-
-    /**
-     * Checks if a local voxel coordinate sits inside the limits of this specific chunk.
-     */
-    public boolean isLocalCoordinateInBounds(int x, int y, int z) {
-        return x >= 0 && x < dimensions.x &&
-                y >= 0 && y < dimensions.y &&
-                z >= 0 && z < dimensions.z;
-    }
-
-    /**
-     * Checks if a world position is inside the boundaries of this entire chunk.
-     */
-    public boolean containsWorldPosition(Vector3f worldPos) {
-        return bounds.isValid() && bounds.containsPoint(worldPos);
-    }
-
-    /**
-     * Finds the world grid position of a chunk given any absolute world position.
-     */
-    public static Vector3i getChunkPositionFromWorld(Vector3f worldPos, Vector3i chunkDimensions, Vector3i outChunkPos) {
-        outChunkPos.x = (int) Math.floor(worldPos.x / chunkDimensions.x);
-        outChunkPos.y = (int) Math.floor(worldPos.y / chunkDimensions.y);
-        outChunkPos.z = (int) Math.floor(worldPos.z / chunkDimensions.z);
-        return outChunkPos;
-    }
-
-    // --- Data Utilities ---
-
-    public boolean isEmpty() {
-        return voxels.isEmpty();
-    }
-
-    public void clear() {
-        voxels.clear();
-        this.reGenMesh();
-    }
-
-    public void fill() {
-        int totalVoxels = dimensions.x * dimensions.y * dimensions.z;
-        voxels.set(0, totalVoxels, true);
-        this.reGenMesh();
-    }
-
-    // --- Getters ---
     public Vector3i getDimensions() {
         return dimensions;
     }
     public Vector3i getChunkPosition() {
         return chunkPosition;
     }
-    public AABBf getBounds() {
-        return bounds;
-    }
-    public Mesh getMesh() {
-        return mesh;
-    }
 
-    public void setMesh(Mesh newMesh) {
-        if (this.mesh != null) {
-            this.mesh.cleanup(); // Wichtig gegen Speicherlecks!
-        }
-        this.mesh = newMesh;
-    }
-
-    /**
-     * Gibt den Grafikspeicher frei, wenn der Chunk entladen oder das Spiel beendet wird.
-     */
     public void cleanup() {
-        if (this.mesh != null) {
-            this.mesh.cleanup();
-            this.mesh = null;
+        if (texture3DId != 0) {
+            glDeleteTextures(texture3DId);
+            texture3DId = 0;
         }
     }
 
+    public Mesh getMesh() {
+        return chunkMesh;
+    }
+
+    public void setMesh(Mesh mesh) {
+        this.chunkMesh = mesh;
+    }
 }
