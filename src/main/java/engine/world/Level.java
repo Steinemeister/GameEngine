@@ -147,33 +147,24 @@ public class Level {
         int worldZOffset = chunkPos.z * dims.z;
         int worldYOffset = chunkPos.y * dims.y;
 
-        // Dieselben mathematischen Parameter wie in deiner Landschaft
         float frequency = 0.015f;
         float maxMountainHeight = 40.0f;
         float baseWaterLevel = -10.0f;
 
-        // 1. SCHNELLE GRENZPRÜFUNG (Mutter-Natur-Check):
-        // Der Perlin-Noise liefert Werte zwischen -1.0 und 1.0.
-        // Daraus ergeben sich die absoluten Grenzen deines Terrains im gesamten Spiel:
-        int absoluteMinTerrainHeight = (int) baseWaterLevel; // Wenn Noise = -1.0
-        int absoluteMaxTerrainHeight = (int) (baseWaterLevel + maxMountainHeight); // Wenn Noise = 1.0
+        int absoluteMinTerrainHeight = (int) baseWaterLevel;
+        int absoluteMaxTerrainHeight = (int) (baseWaterLevel + maxMountainHeight);
 
-        // Liegt dieser Chunk komplett IM HIMMEL über den höchsten Bergen?
         if (worldYOffset > absoluteMaxTerrainHeight) {
-            chunk.fill((byte) 0); // Sofort mit LUFT füllen (Alles auf 0 setzen)
+            chunk.fill((byte) 0);
             chunk.setFullyOccluded(true);
-            return; // Noise-Schleifen komplett überspringen!
+            return;
         }
 
-        // Liegt dieser Chunk komplett IM TIEFEN UNTERGRUND unter der tiefsten Oberfläche?
-        // Wir ziehen noch 4 Blöcke ab, da die Erdschicht (ID 2) unter der Oberfläche liegt.
-        if (worldYOffset + dims.y <= absoluteMinTerrainHeight - 4) {
-            chunk.fill((byte) 3); // Sofort komplett mit STEIN füllen!
-            chunk.setFullyOccluded(true);
-            return; // Noise-Schleifen komplett überspringen!
-        }
+        // Achtung: Wenn wir Höhlen im Untergrund haben, dürfen wir Chunks im tiefen Stein
+        // NICHT mehr blind mit fill(3) füllen, da sie sonst keine Höhlenlöcher enthalten!
 
-        // 2. STANDARD-GENERIERUNG (Nur für Chunks, die die Oberfläche tatsächlich schneiden):
+        boolean hasVoxels = false;
+
         for (int x = 0; x < dims.x; x++) {
             for (int z = 0; z < dims.z; z++) {
                 float globalX = worldXOffset + x;
@@ -194,10 +185,28 @@ public class Level {
                         } else {
                             blockId = 3; // Stein
                         }
+
+                        // --- 3D HÖHLEN-RAUSCHEN ---
+                        // Höhlen-Frequenz (höher = kleinere, komplexere Gänge)
+                        float caveFreq = 0.06f;
+                        float caveNoise = PerlinNoiseGenerator.noise3D(globalX * caveFreq, globalY * caveFreq, globalZ * caveFreq);
+
+                        // Schwellenwert: Wenn caveNoise > 0.45, höhlen wir den Block aus (wird zu Luft)
+                        // Der "globalY < targetHeight - 4" Check sorgt dafür, dass keine Löcher in der Wiese entstehen
+                        if (caveNoise > 0.45f && globalY < targetHeight - 4) {
+                            blockId = 0;
+                        }
                     }
+
+                    if (blockId > 0) hasVoxels = true;
                     chunk.setVoxel(x, y, z, blockId);
                 }
             }
+        }
+
+        // Wenn der gesamte Chunk nach dem Aushöhlen nur aus Luft besteht, Rendern komplett unterbinden
+        if (!hasVoxels) {
+            chunk.setFullyOccluded(true);
         }
     }
 
