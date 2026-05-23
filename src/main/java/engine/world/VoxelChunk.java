@@ -48,12 +48,10 @@ public class VoxelChunk {
         return x + (y * dimensions.x) + (z * dimensions.x * dimensions.y);
     }
 
-    // --- Core API ---
+
     public void setVoxel(int x, int y, int z, boolean active) {
-        if (!getVoxel(x, y, z)) {
-            voxels.set(getIndex(x, y, z), active);
-            this.reGenMesh();
-        }
+        voxels.set(getIndex(x, y, z), active);
+        this.reGenMesh();
     }
 
     public boolean getVoxel(int x, int y, int z) {

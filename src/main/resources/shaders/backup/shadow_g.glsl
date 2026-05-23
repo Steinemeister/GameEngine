@@ -4,14 +4,12 @@ layout (triangle_strip, max_vertices=18) out;
 
 uniform mat4 shadowMatrices[6];
 
-out vec4 FragPos; // FragPos wird an den Fragment-Shader übergeben
+out vec4 FragPos; // FragPos wird an Fragment Shader weitergegeben
 
 void main() {
-    // Für jede der 6 Seiten der Cube Map
     for(int face = 0; face < 6; ++face) {
-        gl_Layer = face; // Eingebauter GLSL-Befehl: Bestimmt, in welche Cube-Map-Seite gerendert wird
-
-        for(int i = 0; i < 3; ++i) { // Für jeden Eckpunkt des Dreiecks
+        gl_Layer = face; // Eingebautes GLSL-Attribut: Bestimmt die Cubemap-Seite
+        for(int i = 0; i < 3; ++i) {
             FragPos = gl_in[i].gl_Position;
             gl_Position = shadowMatrices[face] * FragPos;
             EmitVertex();

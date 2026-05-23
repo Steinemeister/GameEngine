@@ -217,6 +217,8 @@ public class RenderManager implements Runnable {
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     private Matrix4f[] calculateShadowTransforms(Vector3f lightPos) {
@@ -236,8 +238,16 @@ public class RenderManager implements Runnable {
     }
 
     private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Material material) {
+
+        //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(true);
+        glDepthFunc(GL_LESS);
+
         // 1. Shader-Programm aktivieren
         pipeline.bind();
+
 
         // 2. Material-Textur an Slot 10 binden (analog zu deinem alten Shader-Callback)
         if (material != null && material.diffuseTexture() != null) {

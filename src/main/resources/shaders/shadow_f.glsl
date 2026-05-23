@@ -1,11 +1,16 @@
 #version 330 core
 in vec4 FragPos;
+
 uniform vec3 lightPos;
 uniform float far_plane;
 
 void main() {
-    float distance = length(FragPos.xyz - lightPos);
-    // Auf [0,1] Bereich normalisieren
-    distance = distance / far_plane;
-    gl_FragDepth = distance;
+    // Abstand zwischen Fragment und Lichtquelle berechnen
+    float lightDistance = length(FragPos.xyz - lightPos);
+
+    // Den Abstand in den Bereich [0, 1] skalieren, indem wir durch far_plane teilen
+    lightDistance = lightDistance / far_plane;
+
+    // Diesen Wert als Tiefenwert in die Shadow Map schreiben
+    gl_FragDepth = lightDistance;
 }
