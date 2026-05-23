@@ -27,7 +27,7 @@ public class RenderManager implements Runnable {
     private Logger logger;
 
     private long window;
-    private int width = 640;  // Standardwerte erhöht für besseres Fallback
+    private int width = 640;
     private int height = 480;
     private float aspectRatio;
 
@@ -57,7 +57,6 @@ public class RenderManager implements Runnable {
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
-        // NULL-Konstante aus GLFW / LWJGL3
         window = glfwCreateWindow(width, height, "Voxel Level Engine", 0L, 0L);
         if (window == 0L) {
             logger.error("unable to create window");
@@ -95,33 +94,27 @@ public class RenderManager implements Runnable {
     private void loop() {
         logger.info("starting rendering loop");
 
+        // Generiert den 1x1 Pixel Atlas einfriersicher
         TextureAtlasGenerator.generateAtlas(1);
-
-        ShaderPipeline shadowShader = new ShaderPipeline(
-                "src/main/resources/shaders/shadow_v.glsl",
-                "src/main/resources/shaders/shadow_f.glsl",
-                "src/main/resources/shaders/shadow_g.glsl",
-                null, null
-        );
 
         ShaderPipeline mainShader = new ShaderPipeline(
                 "src/main/resources/shaders/main_v.glsl",
                 "src/main/resources/shaders/main_f.glsl"
         );
 
-        // Textur für das gesamte Voxel-Level laden
         Texture textureAtlas = new Texture("src/main/generated/textureAtlas.png");
 
-
+        // Ein einfaches statisches Punktlicht zur Ausleuchtung der Hügel
         List<PointLight> pointLights = new ArrayList<>();
         pointLights.add(new PointLight(
-                new Vector3f(8.0f, 20.0f, 8.0f), // Position erhöht, passend für ein Voxel-Grid
+                new Vector3f(8.0f, 50.0f, 8.0f),
                 new Vector3f(1.0f, 1.0f, 1.0f),
                 1.0f
         ));
 
         Level level = new Level(new Vector3i(16, 16, 16));
 
+        // Ausdehnung der generierten Welt beim Start
         int worldRadiusX = 2;
         int worldRadiusZ = 2;
         int worldHeightY = 2;
@@ -129,9 +122,7 @@ public class RenderManager implements Runnable {
         for (int cx = -worldRadiusX; cx <= worldRadiusX; cx++) {
             for (int cz = -worldRadiusZ; cz <= worldRadiusZ; cz++) {
                 for (int cy = 0; cy < worldHeightY; cy++) {
-
                     VoxelChunk chunk = level.loadChunk(cx, cy, cz);
-
                     level.generateTerrainForChunk(chunk);
                 }
             }
@@ -154,147 +145,80 @@ public class RenderManager implements Runnable {
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
 
-            // Licht sanft im Kreis rotieren lassen
-            pointLights.getFirst().position.rotateAxis((float) Math.toRadians(deltaTime * 15), 0, 1, 0);
+            // Licht sanft kreisen lassen für dynamische Helligkeitswechsel auf den Blöcken
+            pointLights.get(0).position.rotateAxis((float) Math.toRadians(deltaTime * 15), 0.0f, 1.0f, 0.0f);
 
             camera.handleInput(input, deltaTime);
             camera.update(aspectRatio);
 
-            // 1. Schatten-Pass (Level wirft Schatten auf sich selbst)
-            renderLevelShadows(level, pointLights, shadowShader);
-
-            // 2. Haupt-Render-Pass
+            // Nur noch der Haupt-Renderpass, direkt auf das Fenster
             glViewport(0, 0, width, height);
-            bindShadowMaps(pointLights, mainShader);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(true);
+            glDepthFunc(GL_LESS);
 
-            // Level auf den Bildschirm zeichnen
-            renderLevel(level, mainShader, camera, textureAtlas);
+            // Level mit dem kreisenden Licht auf den Bildschirm zeichnen
+            renderLevel(level, mainShader, camera, textureAtlas, pointLights.getFirst().position);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
 
         logger.info("stopping rendering loop");
-        level.cleanup(); // Wichtig: Buffer des Levels beim Beenden freigeben
+        level.cleanup();
     }
 
-    private void bindShadowMaps(List<PointLight> lights, ShaderPipeline mainPipeline) {
-        // 1. Die Shader-Pipeline aktivieren, für die die Uniforms gelten sollen
-        mainPipeline.bind();
-
-        // 2. Über alle verfügbaren Punktlichter iterieren
-        for (int i = 0; i < lights.size(); i++) {
-            PointLight light = lights.get(i);
-
-            // Jeder Schatten-Map eine eigene Textur-Einheit zuweisen (GL_TEXTURE0, GL_TEXTURE1, ...)
-            glActiveTexture(GL_TEXTURE0 + i);
-
-            // Die 3D-Tiefen-Cubemap des aktuellen Lichts an diese Einheit binden
-            glBindTexture(GL_TEXTURE_CUBE_MAP, light.fbo.depthCubemap);
-
-            // Dem Shader mitteilen, auf welchem Textur-Slot die Schatten-Map dieses Lichts liegt
-            mainPipeline.setUniform("lights[" + i + "].shadowMap", i);
-
-            // Die Position des Lichts an den Shader übergeben
-            mainPipeline.setUniform("lights[" + i + "].position", light.position);
-
-            // Die Lichtfarbe basierend auf der Intensität berechnen und übergeben
-            org.joml.Vector3f finalColor = light.color.mul(light.intensity, new org.joml.Vector3f());
-            mainPipeline.setUniform("lights[" + i + "].color", finalColor);
-        }
-    }
-
-    /**
-     * Rendert das Voxel-Level aus Sicht der Lichtquellen in die Cube-Shadow-Maps.
-     */
-    private void renderLevelShadows(Level level, List<PointLight> lights, ShaderPipeline shadowPipeline) {
-        shadowPipeline.bind();
-        glEnable(GL_DEPTH_TEST);
-
-        for (PointLight light : lights) {
-            glViewport(0, 0, light.fbo.shadowMapSize, light.fbo.shadowMapSize);
-            light.fbo.bind();
-            glClear(GL_DEPTH_BUFFER_BIT);
-
-            Matrix4f[] transforms = calculateShadowTransforms(light.position);
-            for (int i = 0; i < 6; i++) {
-                shadowPipeline.setUniform("shadowMatrices[" + i + "]", transforms[i]);
-            }
-            shadowPipeline.setUniform("lightPos", light.position);
-            shadowPipeline.setUniform("far_plane", Constants.ZFar);
-
-            // Level in die Shadow-Map zeichnen (Camera = null, da Lichtperspektive genutzt wird)
-            renderLevel(level, shadowPipeline, null, null);
-
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
-    private Matrix4f[] calculateShadowTransforms(Vector3f lightPos) {
-        float aspect = 1.0f;
-        float near = 1.0f;
-        float far = 100.0f;
-        Matrix4f proj = new Matrix4f().perspective((float) Math.toRadians(90.0f), aspect, near, far);
-
-        return new Matrix4f[]{
-                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(1, 0, 0), new Vector3f(0, -1, 0)),
-                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(-1, 0, 0), new Vector3f(0, -1, 0)),
-                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(0, 1, 0), new Vector3f(0, 0, 1)),
-                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(0, -1, 0), new Vector3f(0, 0, -1)),
-                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(0, 0, 1), new Vector3f(0, -1, 0)),
-                new Matrix4f(proj).lookAt(lightPos, new Vector3f(lightPos).add(0, 0, -1), new Vector3f(0, -1, 0))
-        };
-    }
-
-//    glEnable(GL_DEPTH_TEST);
-//    glDepthMask(true);
-//    glDepthFunc(GL_LESS);
-
-    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture) {
-
-        //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture, Vector3f lightPosition) {
+        // 1. Haupt-Shader aktivieren
         pipeline.bind();
 
-        pipeline.setUniform("textureAtlas", 0); // Verknüpft sampler2D textureAtlas mit GL_TEXTURE0
+        // 2. Uniforms für die Textur-Einheiten im Shader fest verdrahten
+        pipeline.setUniform("textureAtlas", 0);
         pipeline.setUniform("voxelTex3D", 1);
 
+        // 3. Den 2D-Texturatlas an Textureinheit 0 binden
+        glActiveTexture(GL_TEXTURE0);
         if (atlasTexture != null) {
-            glActiveTexture(GL_TEXTURE0);
             atlasTexture.bind(0);
-            pipeline.setUniform("textureAtlas", 0);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, 0);
         }
 
-
+        // 4. Kamera-Matrizen und Lichtposition übertragen
         if (camera != null) {
             pipeline.setUniform("view", camera.getView());
             pipeline.setUniform("projection", camera.getProjection());
+            pipeline.setUniform("far_plane", Constants.ZFar);
+            pipeline.setUniform("lightPos", lightPosition);
         }
 
-        // 2. Über alle Chunks iterieren
-        for (VoxelChunk chunk : level.getActiveChunks().values()) {
+        // 5. Model-Matrix setzen (Identitätsmatrix, da Weltkoordinaten im Mesh stecken)
+        org.joml.Matrix4f identityMatrix = new org.joml.Matrix4f();
+        pipeline.setUniform("model", identityMatrix);
 
-            // Welt-Offset und Dimensionen des spezifischen Chunks übergeben
+        // 6. Über alle geladenen Chunks iterieren und prozedural rendern
+        for (VoxelChunk chunk : level.getActiveChunks().values()) {
             org.joml.Vector3i cPos = chunk.getChunkPosition();
             org.joml.Vector3i dims = chunk.getDimensions();
+
+            // Chunk-spezifische Positionsdaten an den Shader senden
             pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(cPos.x * dims.x, cPos.y * dims.y, cPos.z * dims.z));
             pipeline.setUniform("chunkDimensions", dims);
 
-            // 3. Die einzigartige 3D-Textur dieses Chunks an Slot 1 binden
+            // Die 3D-Textur dieses Chunks an Textureinheit 1 binden
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_3D, chunk.getTexture3DId());
-            pipeline.setUniform("voxelTex3D", 1);
 
-            // 4. Das Dummy-VAO binden und über glDrawArrays rendern (keine Indices nötig!)
+            // Das Dummy-VAO binden und via glDrawArrays die Vertices simulieren
             Mesh chunkMesh = chunk.getMesh();
-            if (chunkMesh != null) {
+            if (chunkMesh != null && chunkMesh.vertexCount() > 0) {
                 glBindVertexArray(chunkMesh.vao());
-                // Wir zeichnen rein über die im Shader berechnete Vertex-Anzahl!
                 glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
                 glBindVertexArray(0);
             }
         }
+
+        // Sauberes OpenGL-State-Management: Zurück auf Standard-Einheit 0
+        glActiveTexture(GL_TEXTURE0);
     }
 }
