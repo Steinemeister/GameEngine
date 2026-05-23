@@ -117,11 +117,13 @@ public class RenderManager implements Runnable {
         Camera camera = new Camera();
 
         // NEU: Initialer Aufruf mit der Startposition der Kamera und Sichtradius (z.B. 4 Chunks weit)
-        int viewRadius = 5;
+        int viewRadius = 12;
         level.updateVisibleChunks(camera.getPosition(), viewRadius);
 
         InputManager input = new InputManager(window);
         lastFrameTime = glfwGetTime();
+
+        int frameCounter = 0;
 
         while (!glfwWindowShouldClose(window)) {
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -136,10 +138,14 @@ public class RenderManager implements Runnable {
             camera.update(aspectRatio);
 
             // 1. Chunks um die Kamera herum im Hintergrund anfordern
-            level.updateVisibleChunks(camera.getPosition(), viewRadius);
+            frameCounter++;
+            if (frameCounter >= 10) {
+                level.updateVisibleChunks(camera.getPosition(), viewRadius);
+            }
+
 
             // 2. NEU: Fertig berechnete Hintergrund-Chunks stoßfrei auf die GPU laden
-            level.uploadPendingTextures();
+            level.uploadPendingTextures(camera.getPosition());
 
             glViewport(0, 0, width, height);
             glEnable(GL_DEPTH_TEST);
@@ -185,6 +191,10 @@ public class RenderManager implements Runnable {
         Vector3i dims = level.getChunkDimensions();
 
         for (VoxelChunk chunk : level.getActiveChunks().values()) {
+
+            if (chunk.isFullyOccluded()) {
+                continue;
+            }
             // Nur rendern, wenn der Chunk fertig generiert ist
             Mesh chunkMesh = chunk.getMesh();
             if (chunkMesh == null || chunkMesh.vertexCount() == 0) continue;

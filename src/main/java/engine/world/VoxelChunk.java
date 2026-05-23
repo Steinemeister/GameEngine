@@ -33,6 +33,7 @@ public class VoxelChunk {
     private Mesh chunkMesh;      // Unser "leeres" oder instanziertes Mesh
 
     private volatile boolean readyToUpload = false;
+    private boolean isFullyOccluded = false;
 
     public VoxelChunk(Vector3i dimensions, Vector3i chunkPosition) {
         this.dimensions = new Vector3i(dimensions);
@@ -152,5 +153,12 @@ public class VoxelChunk {
     }
     public void setReadyToUpload(boolean ready) {
         this.readyToUpload = ready;
+    }
+
+    public boolean isFullyOccluded() {
+        return isFullyOccluded;
+    }
+    public void setFullyOccluded(boolean occluded) {
+        this.isFullyOccluded = occluded;
     }
 }

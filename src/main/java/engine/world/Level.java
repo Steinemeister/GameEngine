@@ -87,30 +87,93 @@ public class Level {
      * Diese Methode läuft auf dem Haupt-Thread im Render-Loop. Sie prüft, welche
      * Hintergrund-Chunks fertig sind und lädt deren Texturen/VAOs stoßfrei auf die GPU.
      */
-    public void uploadPendingTextures() {
+    public void uploadPendingTextures(Vector3f playerWorldPos) {
+        int uploadsThisFrame = 0;
+        int maxUploadsPerFrame = 2; // Stoßgrenze pro Frame
+
+        // 1. Alle Chunks sammeln, die aktuell auf einen Upload warten und sichtbar sein können
+        java.util.List<VoxelChunk> pendingChunks = new java.util.ArrayList<>();
+
         for (VoxelChunk chunk : activeChunks.values()) {
-            // Wenn der Noise fertig ist, aber das Mesh/die Textur noch fehlt
-            if (chunk.isReadyToUpload() && chunk.getMesh() == null) {
-                Mesh dummyMesh = ChunkMeshGenerator.generateMesh(chunk, this);
-                chunk.setMesh(dummyMesh);
-                chunk.update3DTexture();
-                chunk.setReadyToUpload(false); // Fertig hochgeladen
+            if (chunk.isReadyToUpload() && chunk.getMesh() == null && !chunk.isFullyOccluded()) {
+                pendingChunks.add(chunk);
+            }
+        }
+
+        // Wenn nichts hochzuladen ist, direkt abbrechen
+        if (pendingChunks.isEmpty()) {
+            return;
+        }
+
+        // 2. Die Liste nach der Nähe zum Spieler sortieren (Niedrige Distanz zuerst)
+        org.joml.Vector3i dims = getChunkDimensions();
+        pendingChunks.sort((c1, c2) -> {
+            // Mittelpunkt von Chunk 1 in Weltkoordinaten bestimmen
+            float c1X = (c1.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
+            float c1Y = (c1.getChunkPosition().y * dims.y) + (dims.y * 0.5f);
+            float c1Z = (c1.getChunkPosition().z * dims.z) + (dims.z * 0.5f);
+            float distSq1 = playerWorldPos.distanceSquared(c1X, c1Y, c1Z);
+
+            // Mittelpunkt von Chunk 2 in Weltkoordinaten bestimmen
+            float c2X = (c2.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
+            float c2Y = (c2.getChunkPosition().y * dims.y) + (dims.y * 0.5f);
+            float c2Z = (c2.getChunkPosition().z * dims.z) + (dims.z * 0.5f);
+            float distSq2 = playerWorldPos.distanceSquared(c2X, c2Y, c2Z);
+
+            // Sortierung aufsteigend (kleinste Distanz zuerst)
+            return Float.compare(distSq1, distSq2);
+        });
+
+        // 3. Nur die am nächsten liegenden Chunks in diesem Frame verarbeiten
+        for (VoxelChunk chunk : pendingChunks) {
+            Mesh dummyMesh = ChunkMeshGenerator.generateMesh(chunk, this);
+            chunk.setMesh(dummyMesh);
+            chunk.update3DTexture();
+
+            chunk.setReadyToUpload(false); // Aus der Warteschlange entfernen
+            uploadsThisFrame++;
+
+            if (uploadsThisFrame >= maxUploadsPerFrame) {
+                break;
             }
         }
     }
 
     public void generateTerrainForChunk(VoxelChunk chunk) {
-        Vector3i chunkPos = chunk.getChunkPosition();
-        Vector3i dims = chunk.getDimensions();
+        org.joml.Vector3i chunkPos = chunk.getChunkPosition();
+        org.joml.Vector3i dims = chunk.getDimensions();
 
         int worldXOffset = chunkPos.x * dims.x;
         int worldZOffset = chunkPos.z * dims.z;
         int worldYOffset = chunkPos.y * dims.y;
 
-        float frequency = 0.015f; // Frequenz halbiert für majestätischere, größere Berge bei hoher Sichtweite
-        float maxMountainHeight = 40.0f; // Höhere Berge passend zur Render Distance
+        // Dieselben mathematischen Parameter wie in deiner Landschaft
+        float frequency = 0.015f;
+        float maxMountainHeight = 40.0f;
         float baseWaterLevel = -10.0f;
 
+        // 1. SCHNELLE GRENZPRÜFUNG (Mutter-Natur-Check):
+        // Der Perlin-Noise liefert Werte zwischen -1.0 und 1.0.
+        // Daraus ergeben sich die absoluten Grenzen deines Terrains im gesamten Spiel:
+        int absoluteMinTerrainHeight = (int) baseWaterLevel; // Wenn Noise = -1.0
+        int absoluteMaxTerrainHeight = (int) (baseWaterLevel + maxMountainHeight); // Wenn Noise = 1.0
+
+        // Liegt dieser Chunk komplett IM HIMMEL über den höchsten Bergen?
+        if (worldYOffset > absoluteMaxTerrainHeight) {
+            chunk.fill((byte) 0); // Sofort mit LUFT füllen (Alles auf 0 setzen)
+            chunk.setFullyOccluded(true);
+            return; // Noise-Schleifen komplett überspringen!
+        }
+
+        // Liegt dieser Chunk komplett IM TIEFEN UNTERGRUND unter der tiefsten Oberfläche?
+        // Wir ziehen noch 4 Blöcke ab, da die Erdschicht (ID 2) unter der Oberfläche liegt.
+        if (worldYOffset + dims.y <= absoluteMinTerrainHeight - 4) {
+            chunk.fill((byte) 3); // Sofort komplett mit STEIN füllen!
+            chunk.setFullyOccluded(true);
+            return; // Noise-Schleifen komplett überspringen!
+        }
+
+        // 2. STANDARD-GENERIERUNG (Nur für Chunks, die die Oberfläche tatsächlich schneiden):
         for (int x = 0; x < dims.x; x++) {
             for (int z = 0; z < dims.z; z++) {
                 float globalX = worldXOffset + x;
