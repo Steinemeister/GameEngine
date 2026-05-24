@@ -7,20 +7,8 @@ import org.lwjgl.BufferUtils;
 
 import java.nio.ByteBuffer;
 
-import static org.lwjgl.opengl.GL11.GL_NEAREST;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_MAG_FILTER;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_MIN_FILTER;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_WRAP_S;
-import static org.lwjgl.opengl.GL11.GL_TEXTURE_WRAP_T;
-import static org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE;
-import static org.lwjgl.opengl.GL11.glBindTexture;
-import static org.lwjgl.opengl.GL11.glDeleteTextures;
-import static org.lwjgl.opengl.GL11.glGenTextures;
-import static org.lwjgl.opengl.GL11.glTexParameteri;
-import static org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE;
-import static org.lwjgl.opengl.GL12.GL_TEXTURE_3D;
-import static org.lwjgl.opengl.GL12.GL_TEXTURE_WRAP_R;
-import static org.lwjgl.opengl.GL12.glTexImage3D;
+import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL12.*;
 import static org.lwjgl.opengl.GL30.GL_R8UI;
 import static org.lwjgl.opengl.GL30.GL_RED_INTEGER;
 
@@ -65,40 +53,61 @@ public class VoxelChunk {
     /**
      * Lädt die Voxel-Daten als 3D-Textur direkt auf die GPU hoch.
      */
-    public void update3DTexture() {
-        if (texture3DId == 0) {
-            texture3DId = glGenTextures();
+    public void update3DTexture(Level level) {
+        int texW = dimensions.x + 2;
+        int texH = dimensions.y + 2;
+        int texD = dimensions.z + 2;
+
+        // 1. Daten im Buffer sammeln
+        java.nio.ByteBuffer buffer = org.lwjgl.BufferUtils.createByteBuffer(texW * texH * texD);
+        org.joml.Vector3f tempWorldPos = new org.joml.Vector3f();
+
+        float worldXOffset = (float) (chunkPosition.x * dimensions.x);
+        float worldYOffset = (float) (chunkPosition.y * dimensions.y);
+        float worldZOffset = (float) (chunkPosition.z * dimensions.z);
+
+        for (int z = -1; z <= dimensions.z; z++) {
+            for (int y = -1; y <= dimensions.y; y++) {
+                for (int x = -1; x <= dimensions.x; x++) {
+                    byte blockId;
+                    if (x >= 0 && x < dimensions.x && y >= 0 && y < dimensions.y && z >= 0 && z < dimensions.z) {
+                        blockId = getVoxel(x, y, z);
+                    } else {
+                        tempWorldPos.set(worldXOffset + x, worldYOffset + y, worldZOffset + z);
+                        blockId = level.getVoxelAtWorld(tempWorldPos);
+                    }
+                    buffer.put(blockId);
+                }
+            }
         }
-
-        glBindTexture(GL_TEXTURE_3D, texture3DId);
-
-        // Parameter für exakte Block-Kanten (keine Filterung/Glättung zwischen Blöcken)
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-
-        // Daten in einen Byte-Buffer kopieren
-        ByteBuffer buffer = BufferUtils.createByteBuffer(voxels.length);
-        buffer.put(voxels);
         buffer.flip();
 
-        // Als R8UI (8-Bit Unsigned Integer, Single Channel) spezifizieren
-        glTexImage3D(
-                GL_TEXTURE_3D,
-                0,
-                GL_R8UI,            // 1. Internes GPU-Format: Unsigned Integer
-                dimensions.x,
-                dimensions.y,
-                dimensions.z,
-                0,
-                GL_RED_INTEGER,     // 2. Format der Java-Daten: Wichtig ist das _INTEGER!
-                GL_UNSIGNED_BYTE,   // 3. Datentyp: byte
-                buffer
-        );
+        // 2. ABSOLUT CONCURRENT-SICHERER UPLOAD AN OPENGL
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+        if (texture3DId == 0) {
+            // Textur komplett neu anlegen (beim ersten Mal)
+            texture3DId = glGenTextures();
+            glBindTexture(GL_TEXTURE_3D, texture3DId);
+
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+            glTexImage3D(GL_TEXTURE_3D, 0, GL_R8UI, texW, texH, texD,
+                    0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, buffer);
+        } else {
+            // Die Textur existiert bereits -> Nur die Pixel im Speicher austauschen!
+            // Das verhindert, dass der NVIDIA-Treiber den Chunk unsichtbar macht!
+            glBindTexture(GL_TEXTURE_3D, texture3DId);
+            glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, texW, texH, texD,
+                    GL_RED_INTEGER, GL_UNSIGNED_BYTE, buffer);
+        }
 
         glBindTexture(GL_TEXTURE_3D, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
 
     public static Vector3i getChunkPositionFromWorld(Vector3f worldPos, Vector3i chunkDimensions, Vector3i outChunkPos) {

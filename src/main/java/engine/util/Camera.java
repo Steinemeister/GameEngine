@@ -1,61 +1,70 @@
 package engine.util;
 
+import engine.world.Level;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 public class Camera {
-    private Matrix4f projection = new Matrix4f();
-    private Matrix4f view = new Matrix4f();
+    private Vector3f position;
+    private float yaw;
+    private float pitch;
 
-    private Vector3f position = new Vector3f(0, 0, 5);
-    private float yaw = -90f, pitch = 0f;
-    private float baseSpeed = 20.0f, sensitivity = 5.0f;
+    private final Vector3f direction;
+    private final Vector3f up;
+    private final Vector3f right;
+
+    private final Matrix4f view;
+    private final Matrix4f projection;
+
+    private final float fov = 70.0f;
+    private final float zFar = Constants.ZFar;
+
+    public Camera() {
+        this.position = new Vector3f(8.0f, 20.0f, 25.0f);
+        this.yaw = -90.0f;
+        this.pitch = -30.0f;
+
+        this.direction = new Vector3f();
+        this.up = new Vector3f(0.0f, 1.0f, 0.0f);
+        this.right = new Vector3f();
+
+        this.view = new Matrix4f();
+        this.projection = new Matrix4f();
+
+        updateVectors();
+    }
 
     public void update(float aspectRatio) {
-        projection.setPerspective((float) Math.toRadians(45.0f), aspectRatio, Constants.ZNear, Constants.ZFar);
+        Vector3f target = new Vector3f(position).add(direction);
+        view.identity().lookAt(position, target, up);
+        projection.identity().perspective((float) Math.toRadians(fov), aspectRatio, 0.1f, zFar);
     }
 
-    public void handleInput(InputManager input, float deltaTime) {
+    public void updateVectors() {
+        float yawRad = (float) Math.toRadians(yaw);
+        float pitchRad = (float) Math.toRadians(pitch);
 
-        float currentSpeed = baseSpeed * deltaTime;
+        direction.x = (float) (Math.cos(yawRad) * Math.cos(pitchRad));
+        direction.y = (float) Math.sin(pitchRad);
+        direction.z = (float) (Math.sin(yawRad) * Math.cos(pitchRad));
+        direction.normalize();
 
-        float currentMouseSpeed = sensitivity * deltaTime;
-
-        yaw += input.getMouseDeltaX() * currentMouseSpeed;
-        pitch -= input.getMouseDeltaY() * currentMouseSpeed;
-        pitch = Math.max(-89.9f, Math.min(89.9f, pitch));
-
-        // 2. Richtungsvektoren berechnen
-        Vector3f front = new Vector3f(
-                (float) (Math.cos(Math.toRadians(yaw)) * Math.cos(Math.toRadians(pitch))),
-                (float) Math.sin(Math.toRadians(pitch)),
-                (float) (Math.sin(Math.toRadians(yaw)) * Math.cos(Math.toRadians(pitch)))
-        ).normalize();
-
-        Vector3f horizontalFront = new Vector3f(front.x, 0, front.z).normalize();
-        Vector3f right = new Vector3f(horizontalFront).cross(0, 1, 0).normalize();
-
-        if (input.isActionActive("FORWARD"))  position.add(new Vector3f(horizontalFront).mul(currentSpeed));
-        if (input.isActionActive("BACKWARD")) position.sub(new Vector3f(horizontalFront).mul(currentSpeed));
-        if (input.isActionActive("LEFT"))     position.sub(new Vector3f(right).mul(currentSpeed));
-        if (input.isActionActive("RIGHT"))    position.add(new Vector3f(right).mul(currentSpeed));
-
-        if (input.isActionActive("UP"))       position.y += currentSpeed;
-        if (input.isActionActive("DOWN"))     position.y -= currentSpeed;
-
-        view.setLookAt(position, new Vector3f(position).add(front), new Vector3f(0, 1, 0));
+        direction.cross(0.0f, 1.0f, 0.0f, right).normalize();
+        right.cross(direction, up).normalize();
     }
 
-    public Matrix4f getProjection() { return projection; }
+    // --- Reine Getter und Setter ---
+    public Vector3f getPosition() { return position; }
+    public Vector3f getDirection() { return direction; }
+    public Vector3f getRight() { return right; }
     public Matrix4f getView() { return view; }
-    public void setView(Matrix4f view) { this.view = view; }
+    public Matrix4f getProjection() { return projection; }
+    public float getYaw() { return yaw; }
+    public void setYaw(float yaw) { this.yaw = yaw; updateVectors(); }
+    public float getPitch() { return pitch; }
+    public void setPitch(float pitch) { this.pitch = pitch; updateVectors(); }
 
     public void setPos(Vector3f pos) {
-        this.position.set(pos);
-        view.setTranslation(pos);
-    }
-
-    public Vector3f getPosition() {
-        return position;
+        this.position = pos;
     }
 }

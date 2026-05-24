@@ -90,6 +90,8 @@ public class RenderManager implements Runnable {
         glCullFace(GL_BACK);
         glFrontFace(GL_CCW);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
 
     private void loop() {
@@ -105,19 +107,16 @@ public class RenderManager implements Runnable {
 
         Texture textureAtlas = new Texture("src/main/generated/textureAtlas.png");
 
-        // Ein einfaches statisches Punktlicht zur Ausleuchtung der Hügel
-        List<PointLight> pointLights = new ArrayList<>();
-        pointLights.add(new PointLight(
-                new Vector3f(8.0f, 50.0f, 8.0f),
-                new Vector3f(1.0f, 1.0f, 1.0f),
-                1.0f
-        ));
+        org.joml.Vector3f sunDirection = new org.joml.Vector3f(-0.6f, -0.8f, -0.4f).normalize();
+        org.joml.Vector3f sunColor = new org.joml.Vector3f(1.0f, 1.0f, 0.9f);
 
         Level level = new Level(new Vector3i(16, 16, 16));
         Camera camera = new Camera();
 
+        camera.setPos(new Vector3f(0, 90, 0));
+
         // NEU: Initialer Aufruf mit der Startposition der Kamera und Sichtradius (z.B. 4 Chunks weit)
-        int viewRadius = 12;
+        int viewRadius = 20;
         level.updateVisibleChunks(camera.getPosition(), viewRadius);
 
         InputManager input = new InputManager(window);
@@ -132,15 +131,19 @@ public class RenderManager implements Runnable {
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
 
-            pointLights.get(0).position.rotateAxis((float) Math.toRadians(deltaTime * 15), 0.0f, 1.0f, 0.0f);
+            input.updateMouse();
 
-            camera.handleInput(input, deltaTime);
+            input.handleModeSwitch();
+
+            input.updateCameraMovement(camera, level, deltaTime);
+
             camera.update(aspectRatio);
 
             // 1. Chunks um die Kamera herum im Hintergrund anfordern
             frameCounter++;
-            if (frameCounter >= 10) {
+            if (frameCounter >= 20) {
                 level.updateVisibleChunks(camera.getPosition(), viewRadius);
+                frameCounter = 0;
             }
 
 
@@ -153,7 +156,7 @@ public class RenderManager implements Runnable {
             glDepthFunc(GL_LESS);
 
             // 3. Zeichnen (Nutzt jetzt das blitzschnelle Frustum Culling)
-            renderLevel(level, mainShader, camera, textureAtlas, pointLights.get(0).position);
+            renderLevel(level, mainShader, camera, textureAtlas, sunDirection, sunColor);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
@@ -163,7 +166,7 @@ public class RenderManager implements Runnable {
         level.cleanup();
     }
 
-    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture, Vector3f lightPosition) {
+    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture, Vector3f sunDir, Vector3f sunColor) {
         pipeline.bind();
 
         pipeline.setUniform("textureAtlas", 0);
@@ -178,42 +181,62 @@ public class RenderManager implements Runnable {
             pipeline.setUniform("view", camera.getView());
             pipeline.setUniform("projection", camera.getProjection());
             pipeline.setUniform("far_plane", Constants.ZFar);
-            pipeline.setUniform("lightPos", lightPosition);
+
+            pipeline.setUniform("sunDirection", sunDir);
+            pipeline.setUniform("sunColor", sunColor);
         }
 
         org.joml.Matrix4f identityMatrix = new org.joml.Matrix4f();
         pipeline.setUniform("model", identityMatrix);
 
-        // --- NEU: Sichtkegel (Frustum) aus der Kamera-Kombination berechnen ---
+        // Sichtkegel berechnen
         org.joml.Matrix4f vpMatrix = new org.joml.Matrix4f(camera.getProjection()).mul(camera.getView());
         FrustumIntersection frustum = new FrustumIntersection(vpMatrix);
-
         Vector3i dims = level.getChunkDimensions();
 
-        for (VoxelChunk chunk : level.getActiveChunks().values()) {
+        // =================================================================
+        // DURCHGANG 1: DIE SOLIDEN BLÖCKE ALLER CHUNKS ZEICHNEN
+        // =================================================================
+        pipeline.setUniform("renderPass", 0); // Shader blendet Wasser aus
+        glDepthMask(true);                    // Tiefenpuffer-Schreiben erlauben
+        glEnable(GL_CULL_FACE);               // Culling für solide Blöcke aktiv
 
-            if (chunk.isFullyOccluded()) {
-                continue;
-            }
-            // Nur rendern, wenn der Chunk fertig generiert ist
+        renderAllVisibleChunks(level, pipeline, frustum, dims);
+
+        // =================================================================
+        // DURCHGANG 2: DAS TRANSPARENTE WASSER ALLER CHUNKS DARÜBERLEGEN
+        // =================================================================
+        pipeline.setUniform("renderPass", 1); // Shader zeichnet NUR Wasser
+
+        glDepthMask(false);                   // Tiefenpuffer-Schreiben sperren
+        glDisable(GL_CULL_FACE);              // Culling aus für beidseitiges Wasser-Rendering
+
+        renderAllVisibleChunks(level, pipeline, frustum, dims);
+
+        // =================================================================
+        // OPENGL STATE ZURÜCKSETZEN
+        // =================================================================
+        glEnable(GL_CULL_FACE);
+        glDepthMask(true);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    private void renderAllVisibleChunks(Level level, ShaderPipeline pipeline, FrustumIntersection frustum, Vector3i dims) {
+        for (VoxelChunk chunk : level.getActiveChunks().values()) {
+            //if (chunk.isFullyOccluded()) continue;
+
             Mesh chunkMesh = chunk.getMesh();
             if (chunkMesh == null || chunkMesh.vertexCount() == 0) continue;
 
-            // Welt-Position des Chunks für den Sichtbarkeitstest bestimmen
             Vector3i cPos = chunk.getChunkPosition();
             float minX = cPos.x * dims.x;
             float minY = cPos.y * dims.y;
             float minZ = cPos.z * dims.z;
-            float maxX = minX + dims.x;
-            float maxY = minY + dims.y;
-            float maxZ = minZ + dims.z;
 
-            // FRUSTUM CULLING: Wenn der Chunk komplett außerhalb des Sichtfelds ist -> Überspringen!
-            if (frustum.intersectAab(minX, minY, minZ, maxX, maxY, maxZ) == FrustumIntersection.OUTSIDE) {
+            if (frustum.intersectAab(minX, minY, minZ, minX + dims.x, minY + dims.y, minZ + dims.z) == FrustumIntersection.OUTSIDE) {
                 continue;
             }
 
-            // Chunk-spezifische Uniforms setzen und zeichnen
             pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(minX, minY, minZ));
             pipeline.setUniform("chunkDimensions", dims);
 
@@ -224,6 +247,5 @@ public class RenderManager implements Runnable {
             glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
             glBindVertexArray(0);
         }
-        glActiveTexture(GL_TEXTURE0);
     }
 }

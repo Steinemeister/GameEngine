@@ -5,6 +5,7 @@ uniform mat4 projection;
 uniform ivec3 chunkDimensions;
 uniform vec3 chunkWorldPos;
 uniform usampler3D voxelTex3D;
+uniform int renderPass;
 
 flat out uint BlockID;
 out vec3 FragPos;
@@ -18,12 +19,12 @@ vec3(0,0,1), vec3(1,0,1), vec3(1,1,1), vec3(0,1,1)
 );
 
 const int faceIndices[] = int[](
-1,0,3, 1,3,2, // Hinten (Z-)
-4,5,6, 4,6,7, // Vorne (Z+)
-0,4,7, 0,7,3, // Links (X-)
-5,1,2, 5,2,6, // Rechts (X+)
-3,6,2, 3,7,6, // Oben (Y+)
-0,1,5, 0,5,4  // Unten (Y-)
+1,0,3, 1,3,2, // Hinten
+4,5,6, 4,6,7, // Vorne
+0,4,7, 0,7,3, // Links
+5,1,2, 5,2,6, // Rechts
+3,6,2, 3,7,6, // Oben
+0,1,5, 0,5,4  // Unten
 );
 
 const vec3 faceNormals[] = vec3[](
@@ -49,34 +50,65 @@ void main() {
         return;
     }
 
-    uint blockType = texelFetch(voxelTex3D, localPos, 0).r;
+    ivec3 texPos = localPos + ivec3(1);
+    uint blockType = texelFetch(voxelTex3D, texPos, 0).r;
+
     if (blockType == 0u) {
         gl_Position = vec4(0.0);
         return;
     }
 
-    // --- KORRIGIERTES GPU FACE CULLING ---
-    ivec3 neighborPos = localPos + ivec3(faceNormals[faceIdx]);
+    // --- RENDER PASS FILTERUNG ---
+    if (renderPass == 0 && blockType == 4u) {
+        gl_Position = vec4(0.0);
+        return;
+    }
+    if (renderPass == 1 && blockType != 4u) {
+        gl_Position = vec4(0.0);
+        return;
+    }
 
-    // Wir prüfen, ob der Nachbarblock sich im SELBEN Chunk befindet
-    if (neighborPos.x >= 0 && neighborPos.x < chunkDimensions.x &&
-    neighborPos.y >= 0 && neighborPos.y < chunkDimensions.y &&
-    neighborPos.z >= 0 && neighborPos.z < chunkDimensions.z) {
+    // --- PERFEKTES CROSS-CHUNK FACE CULLING ---
+    ivec3 neighborTexPos = texPos + ivec3(faceNormals[faceIdx]);
 
-        uint neighborType = texelFetch(voxelTex3D, neighborPos, 0).r;
-        if (neighborType > 0u) {
-            gl_Position = vec4(0.0); // Innerer Block ist verdeckt -> Ausblenden
-            return;
+    if (neighborTexPos.x >= 0 && neighborTexPos.x < (chunkDimensions.x + 2) &&
+    neighborTexPos.y >= 0 && neighborTexPos.y < (chunkDimensions.y + 2) &&
+    neighborTexPos.z >= 0 && neighborTexPos.z < (chunkDimensions.z + 2)) {
+
+        uint neighborType = texelFetch(voxelTex3D, neighborTexPos, 0).r;
+
+        // FALL 1: Der aktuelle Block ist WASSER (4u)
+        if (blockType == 4u) {
+            // Wasser darf NUR gezeichnet werden, wenn der Nachbar LUFT (0u) ist!
+            // Wenn der Nachbar Stein, Erde, Gras ODER anderes Wasser ist -> Fläche cullen!
+            if (neighborType != 0u) {
+                gl_Position = vec4(0.0);
+                return;
+            }
         }
-    } else {
-        // KORREKTUR: Der Nachbarblock liegt in einem ANDEREN Chunk!
-        // Da wir im Shader keinen Zugriff auf die Nachbar-Textur haben, erzwingen wir hier,
-        // dass die Außenwand gezeichnet wird. Dadurch schaust du nahtlos in den nächsten Chunk!
+        // FALL 2: Der aktuelle Block ist SOLIDE (Stein, Erde, Gras)
+        else {
+            // Ein solider Block darf seine Fläche NUR DANN ausblenden, wenn der Nachbar
+            // EBENFALLS solide ist (ID > 0 und NICHT Wasser).
+            // Wenn der Nachbar Luft (0u) ODER Wasser (4u) ist, MUSS die feste Wand stehen bleiben!
+            if (neighborType == 0u || neighborType == 4u) {
+                // Luft oder Wasser als Nachbar -> Wand zwingend zeichnen!
+            } else {
+                // Stein an Erde / Stein an Stein -> Innenwand fehlerfrei ausblenden
+                gl_Position = vec4(0.0);
+                return;
+            }
+        }
     }
 
     int lookupIdx = faceIdx * 6 + vertexIdx;
     vec3 localVertexPos = vertices[faceIndices[lookupIdx]];
     vec3 worldVertexPos = chunkWorldPos + vec3(localPos) + localVertexPos;
+
+    // Minimales Anheben des Wassers um Haaresbreite nach außen gegen Z-Fighting an Luftgrenzen
+    if (blockType == 4u) {
+        worldVertexPos += faceNormals[faceIdx] * 0.002;
+    }
 
     FragPos = worldVertexPos;
     Normal = faceNormals[faceIdx];

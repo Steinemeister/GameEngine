@@ -1,6 +1,7 @@
 package engine.world;
 
 import engine.object.Mesh;
+import engine.worldGen.WorldGen;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
 
@@ -19,10 +20,14 @@ public class Level {
     // Thread-Pool für die Hintergrund-Berechnung (Nutzt so viele Threads wie CPU-Kerne vorhanden sind)
     private final ExecutorService threadPool;
 
+    private final WorldGen worldGen;
+
     public Level(Vector3i chunkDimensions) {
         this.chunkDimensions = new Vector3i(chunkDimensions);
         this.activeChunks = new ConcurrentHashMap<>();
         this.threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+        this.worldGen = new WorldGen(1337L);
     }
 
     public VoxelChunk loadChunk(int cx, int cy, int cz) {
@@ -40,44 +45,55 @@ public class Level {
      * auf Hintergrund-Threads aus.
      */
     public void updateVisibleChunks(Vector3f centerWorldPos, int viewRadius) {
-        Vector3i centerChunk = new Vector3i();
+        org.joml.Vector3i centerChunk = new org.joml.Vector3i();
         VoxelChunk.getChunkPositionFromWorld(centerWorldPos, chunkDimensions, centerChunk);
 
-        Map<Vector3i, VoxelChunk> newActiveChunks = new HashMap<>();
+        java.util.Map<org.joml.Vector3i, VoxelChunk> newActiveChunks = new java.util.HashMap<>();
 
-        for (int x = -viewRadius; x <= viewRadius; x++) {
-            for (int y = -viewRadius; y <= viewRadius; y++) {
-                for (int z = -viewRadius; z <= viewRadius; z++) {
+        // WICHTIG: Der Lade-Radius im Hintergrund ist um 1 größer als der Sicht-Radius!
+        int generationRadius = viewRadius + 1;
+
+        for (int x = -generationRadius; x <= generationRadius; x++) {
+            for (int y = -generationRadius; y <= generationRadius; y++) {
+                for (int z = -generationRadius; z <= generationRadius; z++) {
                     int cx = centerChunk.x + x;
                     int cy = centerChunk.y + y;
                     int cz = centerChunk.z + z;
 
-                    Vector3i chunkKey = new Vector3i(cx, cy, cz);
+                    org.joml.Vector3i chunkKey = new org.joml.Vector3i(cx, cy, cz);
                     VoxelChunk chunk = activeChunks.get(chunkKey);
 
                     if (chunk == null) {
-                        // Chunk leer erzeugen und sofort in die Map eintragen
                         VoxelChunk newChunk = new VoxelChunk(chunkDimensions, chunkKey);
                         activeChunks.put(chunkKey, newChunk);
                         chunk = newChunk;
 
-                        // Die schwere Perlin-Noise Arbeit in den Hintergrund-Thread auslagern!
                         threadPool.submit(() -> {
-                            generateTerrainForChunk(newChunk);
-                            // Flag setzen, dass der Chunk bereit für OpenGL ist
-                            newChunk.setReadyToUpload(true);
+                            synchronized (newChunk) {
+                                generateTerrainForChunk(newChunk);
+                                newChunk.setReadyToUpload(true);
+                            }
                         });
                     }
 
-                    newActiveChunks.put(chunkKey, chunk);
+                    // NUR Chunks, die innerhalb des echten Sicht-Radius liegen,
+                    // werden in die aktive Render-Liste übernommen!
+                    if (Math.abs(x) <= viewRadius && Math.abs(y) <= viewRadius && Math.abs(z) <= viewRadius) {
+                        newActiveChunks.put(chunkKey, chunk);
+                    }
                 }
             }
         }
 
-        // Ausgelaufene Chunks löschen
-        for (Map.Entry<Vector3i, VoxelChunk> entry : activeChunks.entrySet()) {
-            if (!newActiveChunks.containsKey(entry.getKey())) {
-                VoxelChunk removed = activeChunks.remove(entry.getKey());
+        // Chunks, die komplett aus dem erweiterten Generierungs-Radius fliegen, löschen
+        for (Map.Entry<org.joml.Vector3i, VoxelChunk> entry : activeChunks.entrySet()) {
+            org.joml.Vector3i k = entry.getKey();
+            int dx = Math.abs(k.x - centerChunk.x);
+            int dy = Math.abs(k.y - centerChunk.y);
+            int dz = Math.abs(k.z - centerChunk.z);
+
+            if (dx > generationRadius || dy > generationRadius || dz > generationRadius) {
+                VoxelChunk removed = activeChunks.remove(k);
                 if (removed != null) removed.cleanup();
             }
         }
@@ -89,50 +105,56 @@ public class Level {
      */
     public void uploadPendingTextures(Vector3f playerWorldPos) {
         int uploadsThisFrame = 0;
-        int maxUploadsPerFrame = 2; // Stoßgrenze pro Frame
+        int maxUploadsPerFrame = 2;
 
-        // 1. Alle Chunks sammeln, die aktuell auf einen Upload warten und sichtbar sein können
         java.util.List<VoxelChunk> pendingChunks = new java.util.ArrayList<>();
-
         for (VoxelChunk chunk : activeChunks.values()) {
             if (chunk.isReadyToUpload() && chunk.getMesh() == null && !chunk.isFullyOccluded()) {
                 pendingChunks.add(chunk);
             }
         }
 
-        // Wenn nichts hochzuladen ist, direkt abbrechen
-        if (pendingChunks.isEmpty()) {
-            return;
-        }
+        if (pendingChunks.isEmpty()) return;
 
-        // 2. Die Liste nach der Nähe zum Spieler sortieren (Niedrige Distanz zuerst)
+        // Nach Nähe zum Spieler sortieren
         org.joml.Vector3i dims = getChunkDimensions();
         pendingChunks.sort((c1, c2) -> {
-            // Mittelpunkt von Chunk 1 in Weltkoordinaten bestimmen
             float c1X = (c1.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
             float c1Y = (c1.getChunkPosition().y * dims.y) + (dims.y * 0.5f);
             float c1Z = (c1.getChunkPosition().z * dims.z) + (dims.z * 0.5f);
             float distSq1 = playerWorldPos.distanceSquared(c1X, c1Y, c1Z);
-
-            // Mittelpunkt von Chunk 2 in Weltkoordinaten bestimmen
             float c2X = (c2.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
             float c2Y = (c2.getChunkPosition().y * dims.y) + (dims.y * 0.5f);
             float c2Z = (c2.getChunkPosition().z * dims.z) + (dims.z * 0.5f);
             float distSq2 = playerWorldPos.distanceSquared(c2X, c2Y, c2Z);
-
-            // Sortierung aufsteigend (kleinste Distanz zuerst)
             return Float.compare(distSq1, distSq2);
         });
 
-        // 3. Nur die am nächsten liegenden Chunks in diesem Frame verarbeiten
+        int[][] directions = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+        org.joml.Vector3i neighborKey = new org.joml.Vector3i();
+
         for (VoxelChunk chunk : pendingChunks) {
             Mesh dummyMesh = ChunkMeshGenerator.generateMesh(chunk, this);
             chunk.setMesh(dummyMesh);
-            chunk.update3DTexture();
 
-            chunk.setReadyToUpload(false); // Aus der Warteschlange entfernen
+            // 1. Eigene Textur hochladen
+            chunk.update3DTexture(this);
+            chunk.setReadyToUpload(false);
+
+            // 2. --- WICHTIG: DIE NACHBARN TRIGGERN ---
+            org.joml.Vector3i cPos = chunk.getChunkPosition();
+            for (int[] d : directions) {
+                neighborKey.set(cPos.x + d[0], cPos.y + d[1], cPos.z + d[2]);
+                VoxelChunk neighbor = activeChunks.get(neighborKey);
+
+                // Wenn der Nachbar bereits auf der GPU gerendert wird, muss er seine
+                // 3D-Textur neu beladen, um die Kanten-Werte von uns einzulesen!
+                if (neighbor != null && neighbor.getMesh() != null) {
+                    neighbor.update3DTexture(this);
+                }
+            }
+
             uploadsThisFrame++;
-
             if (uploadsThisFrame >= maxUploadsPerFrame) {
                 break;
             }
@@ -144,70 +166,54 @@ public class Level {
         org.joml.Vector3i dims = chunk.getDimensions();
 
         int worldXOffset = chunkPos.x * dims.x;
-        int worldZOffset = chunkPos.z * dims.z;
         int worldYOffset = chunkPos.y * dims.y;
-
-        float frequency = 0.015f;
-        float maxMountainHeight = 40.0f;
-        float baseWaterLevel = -10.0f;
-
-        int absoluteMinTerrainHeight = (int) baseWaterLevel;
-        int absoluteMaxTerrainHeight = (int) (baseWaterLevel + maxMountainHeight);
-
-        if (worldYOffset > absoluteMaxTerrainHeight) {
-            chunk.fill((byte) 0);
-            chunk.setFullyOccluded(true);
-            return;
-        }
-
-        // Achtung: Wenn wir Höhlen im Untergrund haben, dürfen wir Chunks im tiefen Stein
-        // NICHT mehr blind mit fill(3) füllen, da sie sonst keine Höhlenlöcher enthalten!
+        int worldZOffset = chunkPos.z * dims.z;
 
         boolean hasVoxels = false;
 
+        // Iteration über alle lokalen Voxel-Koordinaten des Chunks
         for (int x = 0; x < dims.x; x++) {
-            for (int z = 0; z < dims.z; z++) {
-                float globalX = worldXOffset + x;
-                float globalZ = worldZOffset + z;
+            int worldX = worldXOffset + x;
 
-                float noiseVal = PerlinNoiseGenerator.noise2D(globalX * frequency, globalZ * frequency);
-                int targetHeight = (int) (baseWaterLevel + ((noiseVal + 1.0f) * 0.5f) * maxMountainHeight);
+            for (int z = 0; z < dims.z; z++) {
+                int worldZ = worldZOffset + z;
 
                 for (int y = 0; y < dims.y; y++) {
-                    int globalY = worldYOffset + y;
-                    byte blockId = 0;
+                    int worldY = worldYOffset + y;
 
-                    if (globalY <= targetHeight) {
-                        if (globalY == targetHeight) {
-                            blockId = 1; // Gras
-                        } else if (globalY > targetHeight - 4) {
-                            blockId = 2; // Erde
-                        } else {
-                            blockId = 3; // Stein
-                        }
+                    // Hole die Block-ID für die globalen Weltkoordinaten
+                    byte blockId = worldGen.getBlockAt(worldX, worldY, worldZ);
 
-                        // --- 3D HÖHLEN-RAUSCHEN ---
-                        // Höhlen-Frequenz (höher = kleinere, komplexere Gänge)
-                        float caveFreq = 0.06f;
-                        float caveNoise = PerlinNoiseGenerator.noise3D(globalX * caveFreq, globalY * caveFreq, globalZ * caveFreq);
-
-                        // Schwellenwert: Wenn caveNoise > 0.45, höhlen wir den Block aus (wird zu Luft)
-                        // Der "globalY < targetHeight - 4" Check sorgt dafür, dass keine Löcher in der Wiese entstehen
-                        if (caveNoise > 0.45f && globalY < targetHeight - 4) {
-                            blockId = 0;
-                        }
+                    // Nur feste Blöcke (alles außer Luft = 0) im Chunk platzieren
+                    if (blockId != WorldGen.BLOCK_AIR) {
+                        chunk.setVoxel(x, y, z, blockId);
                     }
 
-                    if (blockId > 0) hasVoxels = true;
-                    chunk.setVoxel(x, y, z, blockId);
                 }
             }
         }
 
-        // Wenn der gesamte Chunk nach dem Aushöhlen nur aus Luft besteht, Rendern komplett unterbinden
-        if (!hasVoxels) {
-            chunk.setFullyOccluded(true);
+        boolean containsAir = false;
+        boolean containsSolid = false;
+
+        for (int i = 0; i < dims.x * dims.y * dims.z; i++) {
+            // Da VoxelChunk intern ein byte[] nutzt, fragen wir die Koordinaten ab:
+            int cx = i % dims.x;
+            int cy = (i / dims.x) % dims.y;
+            int cz = i / (dims.x * dims.y);
+
+            byte id = chunk.getVoxel(cx, cy, cz);
+            if (id == 0 || id == 4) {
+                containsAir = true;
+            } else {
+                containsSolid = true;
+            }
         }
+
+        // Wenn der Chunk NUR Luft enthält (im Himmel) ODER NUR feste Blöcke OHNE Höhlenlöcher:
+        // Höhlen-Chunk! Muss zwingend gerendert werden
+        chunk.setFullyOccluded(!containsSolid || !containsAir);
+        // Sicher verstecken, da keine sichtbaren Hohlräume existieren
     }
 
     public void generateAllMeshes() { /* Unused, da asynchron geladen wird */ }
@@ -218,6 +224,54 @@ public class Level {
             chunk.cleanup();
         }
         activeChunks.clear();
+    }
+
+    public byte getVoxelAtWorld(org.joml.Vector3f worldPos) {
+        org.joml.Vector3i chunkKey = new org.joml.Vector3i();
+        VoxelChunk.getChunkPositionFromWorld(worldPos, chunkDimensions, chunkKey);
+
+        VoxelChunk chunk = activeChunks.get(chunkKey);
+
+        if (chunk != null) {
+            // synchronized zwingt die CPU, den Cache aller Kerne sofort abzugleichen!
+            // Das verhindert, dass unfertige oder veraltete Block-Daten gelesen werden.
+            synchronized (chunk) {
+                if (chunk.isReadyToUpload() || chunk.getMesh() != null) {
+                    org.joml.Vector3i localPos = new org.joml.Vector3i();
+                    chunk.worldToLocalCoordinate(worldPos, localPos);
+                    return chunk.getVoxel(localPos.x, localPos.y, localPos.z);
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    public boolean checkCollision(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+        // Ermittle den Blockbereich, den die Box aktuell schneidet
+        int startX = (int) Math.floor(minX);
+        int endX   = (int) Math.floor(maxX);
+        int startY = (int) Math.floor(minY);
+        int endY   = (int) Math.floor(maxY);
+        int startZ = (int) Math.floor(minZ);
+        int endZ   = (int) Math.floor(maxZ);
+
+        org.joml.Vector3f testPos = new org.joml.Vector3f();
+
+        // Iteriere über alle Blöcke im betroffenen Bereich
+        for (int x = startX; x <= endX; x++) {
+            for (int y = startY; y <= endY; y++) {
+                for (int z = startZ; z <= endZ; z++) {
+                    testPos.set(x, y, z);
+
+                    // Wenn an dieser Position ein solider Block (ID > 0) existiert -> Kollision!
+                    if (getVoxelAtWorld(testPos) > 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false; // Keine Kollision gefunden
     }
 
     public Map<Vector3i, VoxelChunk> getActiveChunks() { return activeChunks; }
