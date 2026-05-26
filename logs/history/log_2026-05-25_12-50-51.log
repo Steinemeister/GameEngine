@@ -1,0 +1,8 @@
+[12:50:50.887][main][VoxelEngine][INFO]: Starting Multi-Threaded Voxel-Engine...
+[12:50:50.897][renderThread][TextureAtlasGenerator][INFO]: generating 1x1 texture-atlas...
+[12:50:50.911][renderThread][TextureAtlasGenerator][INFO]:   [ID 1] -> 01_grass.png
+[12:50:50.912][renderThread][TextureAtlasGenerator][INFO]:   [ID 2] -> 02_dirt.png
+[12:50:50.913][renderThread][TextureAtlasGenerator][INFO]:   [ID 3] -> 03_stone.png
+[12:50:50.913][renderThread][TextureAtlasGenerator][INFO]:   [ID 4] -> 04_water.png
+[12:50:50.916][renderThread][TextureAtlasGenerator][INFO]: atlas saved successfully: C:\Users\oskar\IdeaProjects\GameEngine\src\main\generated\textureAtlas.png
+[12:50:51.380][gameThread][VoxelEngine][INFO]: Asynchronous Game-Thread started successfully.

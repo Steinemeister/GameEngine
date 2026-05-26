@@ -1,0 +1,9 @@
+[13:17:50.145][main][TextureAtlasGenerator][INFO]: generating 1x1 texture-atlas...
+[13:17:50.161][main][TextureAtlasGenerator][INFO]:   [ID 1] -> 01_grass.png
+[13:17:50.162][main][TextureAtlasGenerator][INFO]:   [ID 2] -> 02_dirt.png
+[13:17:50.163][main][TextureAtlasGenerator][INFO]:   [ID 3] -> 03_stone.png
+[13:17:50.163][main][TextureAtlasGenerator][INFO]:   [ID 4] -> 04_water.png
+[13:17:50.166][main][TextureAtlasGenerator][INFO]: atlas saved successfully: C:\Users\oskar\IdeaProjects\GameEngine\src\main\generated\textureAtlas.png
+[13:18:15.393][main][ShaderPipeline][INFO]: Shader-Pipeline 1 erfolgreich freigegeben.
+[13:18:15.394][main][Texture][INFO]: VRAM for texture ID 1 successfully freed
+[13:18:15.394][main][Window][INFO]: Terminiere GLFW...

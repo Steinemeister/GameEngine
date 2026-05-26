@@ -1,0 +1,5 @@
+[13:32:58.490][main][EngineManager][INFO]: starting engine_temp
+[13:32:58.494][renderTread][RenderManager][INFO]: initializing renderer
+[13:32:58.932][renderTread][RenderManager][INFO]: starting rendering loop
+[13:33:07.349][renderTread][RenderManager][INFO]: stopping rendering loop
+[13:33:07.360][renderTread][RenderManager][INFO]: terminating GLFW
