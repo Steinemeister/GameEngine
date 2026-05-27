@@ -193,8 +193,7 @@ public class Level {
             }
         }
 
-        boolean containsAir = false;
-        boolean containsSolid = false;
+        boolean containsNonAir = false;
 
         for (int i = 0; i < dims.x * dims.y * dims.z; i++) {
             // Da VoxelChunk intern ein byte[] nutzt, fragen wir die Koordinaten ab:
@@ -203,17 +202,14 @@ public class Level {
             int cz = i / (dims.x * dims.y);
 
             byte id = chunk.getVoxel(cx, cy, cz);
-            if (id == 0 || id == 4) {
-                containsAir = true;
-            } else {
-                containsSolid = true;
+            if (id != 0) {
+                containsNonAir = true;
             }
         }
 
         // Wenn der Chunk NUR Luft enthält (im Himmel) ODER NUR feste Blöcke OHNE Höhlenlöcher:
-        // Höhlen-Chunk! Muss zwingend gerendert werden
-        chunk.setFullyOccluded(!containsSolid || !containsAir);
-        // Sicher verstecken, da keine sichtbaren Hohlräume existieren
+        chunk.setFullyOccluded(!containsNonAir);
+        //chunk.setFullyOccluded(false);
     }
 
     public void generateAllMeshes() { /* Unused, da asynchron geladen wird */ }

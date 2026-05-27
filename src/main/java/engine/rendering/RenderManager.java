@@ -1,28 +1,22 @@
 package engine.rendering;
 
-import engine.lighting.PointLight;
-import engine.object.Material;
 import engine.object.Mesh;
 import engine.object.Texture;
 import engine.util.*;
-import engine.object.Object;
 import engine.world.Level;
 import engine.world.VoxelChunk;
 import logger.Logger;
 import logger.LoggerFactory;
+import org.jetbrains.annotations.NotNull;
 import org.joml.FrustumIntersection;
-import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
 import org.lwjgl.opengl.*;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL30.*;
-import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.glfw.GLFW.*;
+import static org.lwjgl.opengl.GL40.*;
 
 public class RenderManager implements Runnable {
     private Logger logger;
@@ -34,6 +28,15 @@ public class RenderManager implements Runnable {
 
     private double lastFrameTime = 0.0;
     private float deltaTime = 1.0f;
+
+    private float dayTimeAngle = 0.0f;
+
+    private double fpsTimer = 0.0;
+    private int fpsCounter = 0;
+
+    private int visibleChunksCount = 0;
+
+
 
     public void run() {
         init();
@@ -53,8 +56,8 @@ public class RenderManager implements Runnable {
             throw new IllegalStateException("unable to initialize GLFW");
         }
 
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
@@ -100,10 +103,21 @@ public class RenderManager implements Runnable {
         // Generiert den 1x1 Pixel Atlas einfriersicher
         TextureAtlasGenerator.generateAtlas(1);
 
+
         ShaderPipeline mainShader = new ShaderPipeline(
                 "src/main/resources/shaders/main_v.glsl",
                 "src/main/resources/shaders/main_f.glsl"
         );
+
+        ShaderPipeline skyboxShader = new ShaderPipeline(
+                "src/main/resources/shaders/skybox_v.glsl",
+                "src/main/resources/shaders/skybox_f.glsl"
+        );
+
+        ShaderPipeline transparentShader = new ShaderPipeline(
+                "src/main/resources/shaders/transparent_v.glsl",
+                "src/main/resources/shaders/transparent_f.glsl");
+
 
         Texture textureAtlas = new Texture("src/main/generated/textureAtlas.png");
 
@@ -121,6 +135,9 @@ public class RenderManager implements Runnable {
 
         InputManager input = new InputManager(window);
         lastFrameTime = glfwGetTime();
+        fpsTimer = lastFrameTime;
+
+
 
         int frameCounter = 0;
 
@@ -130,6 +147,41 @@ public class RenderManager implements Runnable {
             double thisFrameTime = glfwGetTime();
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
+
+            dayTimeAngle += deltaTime * 0.25f;
+            if (dayTimeAngle > Math.PI * 2) {
+                dayTimeAngle -= (float) (Math.PI * 2);
+            }
+
+            sunDirection.set(
+                    -0.6f, // Leichte Neigung auf der X-Achse für einen schönen Schattenwinkel
+                    (float) Math.sin(dayTimeAngle), // Y-Höhe (Tag positiv, Nacht negativ)
+                    (float) Math.cos(dayTimeAngle)  // Z-Achsen-Verschiebung
+            ).normalize();
+
+            float auroraNoise = (float) Math.cos(dayTimeAngle * 0.15f) * 0.6f + 0.4f;
+            float auroraActivity = Math.max(0.0f, Math.min(1.0f, auroraNoise));
+
+            // Wenn die Aktivität unter einen Schwellenwert fällt, bleibt es komplett dunkel
+            if (auroraActivity < 0.25f) {
+                auroraActivity = 0.0f;
+            } else {
+                // Skaliere den Rest sauber auf 0.0 bis 1.0
+                auroraActivity = (auroraActivity - 0.25f) / 0.75f;
+            }
+
+            fpsCounter++;
+
+            if (thisFrameTime - fpsTimer >= 1.0) {
+                String title = getTitle(level);
+
+                // Fenstertitel setzen
+                glfwSetWindowTitle(window, title);
+
+                // Zähler zurücksetzen
+                fpsCounter = 0;
+                fpsTimer = thisFrameTime;
+            }
 
             input.updateMouse();
 
@@ -156,7 +208,8 @@ public class RenderManager implements Runnable {
             glDepthFunc(GL_LESS);
 
             // 3. Zeichnen (Nutzt jetzt das blitzschnelle Frustum Culling)
-            renderLevel(level, mainShader, camera, textureAtlas, sunDirection, sunColor);
+            renderLevel(level, mainShader,skyboxShader, transparentShader, camera,
+                    textureAtlas, sunDirection, sunColor, auroraActivity);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
@@ -166,52 +219,109 @@ public class RenderManager implements Runnable {
         level.cleanup();
     }
 
-    private void renderLevel(Level level, ShaderPipeline pipeline, Camera camera, Texture atlasTexture, Vector3f sunDir, Vector3f sunColor) {
-        pipeline.bind();
+    @NotNull
+    private String getTitle(Level level) {
+        long activeChunks = level.getActiveChunks().size();
+        long airChunks = level.getActiveChunks().values().stream()
+                .filter(VoxelChunk::isFullyOccluded).count();
+        long chunksNonAir = activeChunks - airChunks;
 
-        pipeline.setUniform("textureAtlas", 0);
-        pipeline.setUniform("voxelTex3D", 1);
 
+        // Formatierten String für den Titel bauen
+        return String.format(
+                "Voxel Level Engine | " +
+                        "FPS: %d | " +
+                        "Chunks: %d | " +
+                        "Chunks with blocks: %d | " +
+                        "Chunks in View-frustum %d",
+                fpsCounter,
+                activeChunks,
+                chunksNonAir,
+                this.visibleChunksCount
+        );
+    }
+
+    private void renderLevel(Level level, ShaderPipeline mainPipeline,ShaderPipeline skyPipeline,
+                             ShaderPipeline transparentPipeline,
+                             Camera camera, Texture atlasTexture, Vector3f sunDir, Vector3f sunColor, float auroraActivity) {
+
+        this.visibleChunksCount = 0;
+
+        org.joml.Matrix4f identityMatrix = new org.joml.Matrix4f();
+        org.joml.Matrix4f vpMatrix = new org.joml.Matrix4f(camera.getProjection()).mul(camera.getView());
+        FrustumIntersection frustum = new FrustumIntersection(vpMatrix);
+        Vector3i dims = level.getChunkDimensions();
+
+        // Textur-Slot 0 aktivieren und Atlas binden
         glActiveTexture(GL_TEXTURE0);
         if (atlasTexture != null) {
             atlasTexture.bind(0);
         }
 
-        if (camera != null) {
-            pipeline.setUniform("view", camera.getView());
-            pipeline.setUniform("projection", camera.getProjection());
-            pipeline.setUniform("far_plane", Constants.ZFar);
+        // =================================================================
+        // DURCHGANG 1: DIE SOLIDEN BLÖCKE (Main Shader Pipeline)
+        // =================================================================
+        mainPipeline.bind();
+        setupCommonUniforms(mainPipeline, camera, sunDir, sunColor, identityMatrix);
 
-            pipeline.setUniform("sunDirection", sunDir);
-            pipeline.setUniform("sunColor", sunColor);
-        }
+        glDepthMask(true);
+        glEnable(GL_CULL_FACE);
 
-        org.joml.Matrix4f identityMatrix = new org.joml.Matrix4f();
-        pipeline.setUniform("model", identityMatrix);
-
-        // Sichtkegel berechnen
-        org.joml.Matrix4f vpMatrix = new org.joml.Matrix4f(camera.getProjection()).mul(camera.getView());
-        FrustumIntersection frustum = new FrustumIntersection(vpMatrix);
-        Vector3i dims = level.getChunkDimensions();
+        renderAllVisibleChunks(level, mainPipeline, frustum, dims, true);
 
         // =================================================================
-        // DURCHGANG 1: DIE SOLIDEN BLÖCKE ALLER CHUNKS ZEICHNEN
+        // DURCHGANG 2: FULLSCREEN SKYBOX
         // =================================================================
-        pipeline.setUniform("renderPass", 0); // Shader blendet Wasser aus
-        glDepthMask(true);                    // Tiefenpuffer-Schreiben erlauben
-        glEnable(GL_CULL_FACE);               // Culling für solide Blöcke aktiv
+        skyPipeline.bind();
 
-        renderAllVisibleChunks(level, pipeline, frustum, dims);
+        // 1. WICHTIG: Die Translation (Position) aus der View-Matrix entfernen
+        org.joml.Matrix4f skyView = new org.joml.Matrix4f(camera.getView());
+        skyView.m30(0); // X-Translation nullen
+        skyView.m31(0); // Y-Translation nullen
+        skyView.m32(0); // Z-Translation nullen
+
+        // Matrizen invertieren
+        org.joml.Matrix4f invProjection = new org.joml.Matrix4f(camera.getProjection()).invert();
+        org.joml.Matrix4f invView = skyView.invert();
+
+        skyPipeline.setUniform("invProjection", invProjection);
+        skyPipeline.setUniform("invView", invView);
+        skyPipeline.setUniform("sunDirection", sunDir);
+        skyPipeline.setUniform("sunColor", sunColor);
+        skyPipeline.setUniform("time", (float) glfwGetTime());
+        skyPipeline.setUniform("auroraActivity", auroraActivity);
+
+        glDepthMask(false);
+        glDisable(GL_CULL_FACE);
+        glDepthFunc(GL_LEQUAL);
+
+        // 2. WICHTIG FÜR CORE PROFILE: Ein Dummy-VAO binden, sonst zeichnet OpenGL nichts!
+        // Falls du kein globales leeres VAO hast, kannst du hier testweise die ID 0 binden
+        // oder temporär ein temporäres nutzen. Am saubersten ist:
+        int dummyVAO = org.lwjgl.opengl.GL30.glGenVertexArrays();
+        org.lwjgl.opengl.GL30.glBindVertexArray(dummyVAO);
+
+        // Zeichnen
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        // Aufräumen
+        org.lwjgl.opengl.GL30.glBindVertexArray(0);
+        org.lwjgl.opengl.GL30.glDeleteVertexArrays(dummyVAO); // In der Praxis einmalig in init() erzeugen!
+
+        glDepthFunc(GL_LESS);
 
         // =================================================================
-        // DURCHGANG 2: DAS TRANSPARENTE WASSER ALLER CHUNKS DARÜBERLEGEN
+        // DURCHGANG 3: DAS TRANSPARENTE WASSER (Transparent Shader Pipeline)
         // =================================================================
-        pipeline.setUniform("renderPass", 1); // Shader zeichnet NUR Wasser
+        transparentPipeline.bind();
+        setupCommonUniforms(transparentPipeline, camera, sunDir, sunColor, identityMatrix);
 
-        glDepthMask(false);                   // Tiefenpuffer-Schreiben sperren
-        glDisable(GL_CULL_FACE);              // Culling aus für beidseitiges Wasser-Rendering
+        transparentPipeline.setUniform("time", (float) glfwGetTime());
 
-        renderAllVisibleChunks(level, pipeline, frustum, dims);
+        glDepthMask(false);
+        glDisable(GL_CULL_FACE);
+
+        renderAllVisibleChunks(level, transparentPipeline, frustum, dims, false);
 
         // =================================================================
         // OPENGL STATE ZURÜCKSETZEN
@@ -221,7 +331,22 @@ public class RenderManager implements Runnable {
         glActiveTexture(GL_TEXTURE0);
     }
 
-    private void renderAllVisibleChunks(Level level, ShaderPipeline pipeline, FrustumIntersection frustum, Vector3i dims) {
+    private void setupCommonUniforms(ShaderPipeline pipeline, Camera camera, Vector3f sunDir, Vector3f sunColor, org.joml.Matrix4f modelMatrix) {
+        pipeline.setUniform("textureAtlas", 0);
+        pipeline.setUniform("voxelTex3D", 1);
+        pipeline.setUniform("model", modelMatrix);
+
+        if (camera != null) {
+            pipeline.setUniform("view", camera.getView());
+            pipeline.setUniform("projection", camera.getProjection());
+            pipeline.setUniform("far_plane", Constants.ZFar);
+            pipeline.setUniform("sunDirection", sunDir);
+            pipeline.setUniform("sunColor", sunColor);
+        }
+    }
+
+    private void renderAllVisibleChunks(Level level, ShaderPipeline pipeline,
+                                        FrustumIntersection frustum, Vector3i dims, boolean count) {
         for (VoxelChunk chunk : level.getActiveChunks().values()) {
             //if (chunk.isFullyOccluded()) continue;
 
@@ -237,6 +362,8 @@ public class RenderManager implements Runnable {
                 continue;
             }
 
+            if (count) visibleChunksCount++;
+
             pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(minX, minY, minZ));
             pipeline.setUniform("chunkDimensions", dims);
 
@@ -244,7 +371,10 @@ public class RenderManager implements Runnable {
             glBindTexture(GL_TEXTURE_3D, chunk.getTexture3DId());
 
             glBindVertexArray(chunkMesh.vao());
+
             glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
+
+
             glBindVertexArray(0);
         }
     }
