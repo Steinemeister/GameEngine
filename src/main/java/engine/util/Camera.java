@@ -67,4 +67,8 @@ public class Camera {
     public void setPos(Vector3f pos) {
         this.position = pos;
     }
+
+    public Vector3f getFront() {
+        return this.direction;
+    }
 }

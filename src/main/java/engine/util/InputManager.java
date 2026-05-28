@@ -34,6 +34,13 @@ public class InputManager {
 
     private boolean vKeyWasPressed = false;
 
+    private double lastBreakTime = 0.0;
+    private double lastPlaceTime = 0.0;
+    private static final double BREAK_COOLDOWN = 0.25; // 250 Millisekunden Sperre fürs Abbauen
+    private static final double PLACE_COOLDOWN = 0.20;
+
+    private RaycastResult lastRaycastResult = new RaycastResult();
+
     public InputManager(long window) {
         this.window = window;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -55,6 +62,31 @@ public class InputManager {
 
         lastMouseX = x[0];
         lastMouseY = y[0];
+    }
+
+    public void handleBlockInteraction(Level level, Camera camera) {
+        double currentTime = org.lwjgl.glfw.GLFW.glfwGetTime();
+
+        // Führe das Raycasting in jedem Frame aus, um die Auswahlbox aktuell zu halten
+        lastRaycastResult = level.raycast(camera.getPosition(), camera.getFront(), 6.0f);
+
+        if (!lastRaycastResult.hit) return;
+
+        // Abbauen (Linksklick) - Funktioniert nur nach Ablauf des Cooldowns
+        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+            if (currentTime - lastBreakTime >= BREAK_COOLDOWN) {
+                level.setVoxelAtWorldPos(lastRaycastResult.blockPos, (byte) 0);
+                lastBreakTime = currentTime; // Timer zurücksetzen
+            }
+        }
+
+        // Platzieren (Rechtsklick) - Funktioniert nur nach Ablauf des Cooldowns
+        if (org.lwjgl.glfw.GLFW.glfwGetMouseButton(window, org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_RIGHT) == org.lwjgl.glfw.GLFW.GLFW_PRESS) {
+            if (currentTime - lastPlaceTime >= PLACE_COOLDOWN) {
+                level.setVoxelAtWorldPos(lastRaycastResult.adjacentPos, (byte) 1); // Platziere Stein
+                lastPlaceTime = currentTime; // Timer zurücksetzen
+            }
+        }
     }
 
     /**
@@ -213,4 +245,8 @@ public class InputManager {
 
     // Nützlich, um mit einer Taste (z.B. V) den Flugmodus wieder einzuschalten
     public void setCollisionEnabled(boolean enabled) { this.collisionEnabled = enabled; }
+
+    public RaycastResult getLastRaycastResult() {
+        return lastRaycastResult;
+    }
 }

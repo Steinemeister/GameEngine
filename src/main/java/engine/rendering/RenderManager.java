@@ -35,6 +35,8 @@ public class RenderManager implements Runnable {
 
     private int visibleChunksCount = 0;
 
+    private int outlineVAO;
+
 
 
     public void run() {
@@ -94,6 +96,45 @@ public class RenderManager implements Runnable {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        initOutlineGeometry();
+    }
+
+    private void initOutlineGeometry() {
+        // Die 8 Ecken eines 1x1x1 Würfels, leicht aufgebläht (1.002f) gegen Z-Fighting auf der Blockoberfläche
+        float min = -0.001f;
+        float max = 1.001f;
+
+        float[] vertices = {
+                // Unterer Ring
+                min, min, min,  max, min, min,
+                max, min, min,  max, min, max,
+                max, min, max,  min, min, max,
+                min, min, max,  min, min, min,
+                // Oberer Ring
+                min, max, min,  max, max, min,
+                max, max, min,  max, max, max,
+                max, max, max,  min, max, max,
+                min, max, max,  min, max, min,
+                // Vertikale Säulen
+                min, min, min,  min, max, min,
+                max, min, min,  max, max, min,
+                max, min, max,  max, max, max,
+                min, min, max,  min, max, max
+        };
+
+        outlineVAO = glGenVertexArrays();
+        int vbo = glGenBuffers();
+
+        glBindVertexArray(outlineVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
+
+        org.lwjgl.opengl.GL20.glVertexAttribPointer(0, 3, org.lwjgl.opengl.GL11.GL_FLOAT, false, 0, 0);
+        org.lwjgl.opengl.GL20.glEnableVertexAttribArray(0);
+
+        org.lwjgl.opengl.GL15.glBindBuffer(org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER, 0);
+        org.lwjgl.opengl.GL30.glBindVertexArray(0);
     }
 
     private void loop() {
@@ -119,7 +160,13 @@ public class RenderManager implements Runnable {
 
         ShaderPipeline transparentShader = new ShaderPipeline(
                 "src/main/resources/shaders/transparent_v.glsl",
-                "src/main/resources/shaders/transparent_f.glsl");
+                "src/main/resources/shaders/transparent_f.glsl"
+        );
+
+        ShaderPipeline outlineShader = new ShaderPipeline(
+                "src/main/resources/shaders/outline_v.glsl",
+                "src/main/resources/shaders/outline_f.glsl"
+        );
 
 
         Texture textureAtlas = new Texture("src/main/generated/textureAtlas.png");
@@ -189,6 +236,8 @@ public class RenderManager implements Runnable {
 
             input.handleModeSwitch();
 
+            input.handleBlockInteraction(level, camera);
+
             input.updateCameraMovement(camera, level, deltaTime);
 
             camera.update(aspectRatio);
@@ -210,8 +259,8 @@ public class RenderManager implements Runnable {
             glDepthFunc(GL_LESS);
 
             // 3. Zeichnen (Nutzt jetzt das blitzschnelle Frustum Culling)
-            renderLevel(level, mainShader,skyboxShader, transparentShader,depthShader, camera,
-                    textureAtlas, sunDirection, sunColor, auroraActivity);
+            renderLevel(level, mainShader,skyboxShader, transparentShader, depthShader, outlineShader, input,
+                    camera, textureAtlas, sunDirection, sunColor, auroraActivity);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
@@ -243,8 +292,8 @@ public class RenderManager implements Runnable {
         );
     }
 
-    private void renderLevel(Level level, ShaderPipeline mainPipeline,ShaderPipeline skyPipeline,
-                             ShaderPipeline transparentPipeline, ShaderPipeline depthShader,
+    private void renderLevel(Level level, ShaderPipeline mainPipeline,ShaderPipeline skyPipeline, ShaderPipeline transparentPipeline,
+                             ShaderPipeline depthShader, ShaderPipeline outlineShader, InputManager input,
                              Camera camera, Texture atlasTexture, Vector3f sunDir, Vector3f sunColor, float auroraActivity) {
 
         this.visibleChunksCount = 0;
@@ -347,6 +396,30 @@ public class RenderManager implements Runnable {
         glDisable(GL_CULL_FACE);
 
         renderAllVisibleChunks(level, transparentPipeline, frustum, dims, false, true);
+
+        // =================================================================
+        // DURCHGANG 5: NEU - DRAHTGITTER-AUSWAHLBOX ZEICHNEN
+        // =================================================================
+        RaycastResult target = input.getLastRaycastResult(); // Aus dem InputManager holen
+
+        if (target != null && target.hit) {
+            outlineShader.bind();
+            outlineShader.setUniform("view", camera.getView());
+            outlineShader.setUniform("projection", camera.getProjection());
+
+            // Konvertiere Vector3i des Blocks in einen Float-Vector3f für den Shader
+            org.joml.Vector3f blockFloatPos = new org.joml.Vector3f(target.blockPos.x, target.blockPos.y, target.blockPos.z);
+            outlineShader.setUniform("blockPos", blockFloatPos);
+
+            // Linien-Dicke einstellen (2 Pixel breit für gute Lesbarkeit)
+            org.lwjgl.opengl.GL11.glLineWidth(2.0f);
+            org.lwjgl.opengl.GL30.glBindVertexArray(outlineVAO);
+
+            // 24 Vertices als Linienpaare zeichnen
+            org.lwjgl.opengl.GL11.glDrawArrays(org.lwjgl.opengl.GL11.GL_LINES, 0, 24);
+
+            org.lwjgl.opengl.GL30.glBindVertexArray(0);
+        }
 
         // =================================================================
         // OPENGL STATE ZURÜCKSETZEN
