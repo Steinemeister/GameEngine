@@ -27,7 +27,7 @@ public class Level {
     public Level(Vector3i chunkDimensions) {
         this.chunkDimensions = new Vector3i(chunkDimensions);
         this.activeChunks = new ConcurrentHashMap<>();
-        this.threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        this.threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() - 2);
 
         this.worldGen = new WorldGen(1337L);
     }

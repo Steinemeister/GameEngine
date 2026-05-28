@@ -70,7 +70,7 @@ public class RenderManager implements Runnable {
         glfwSetWindowSizeLimits(window, 640, 480, GLFW_DONT_CARE, GLFW_DONT_CARE);
 
         glfwMakeContextCurrent(window);
-        glfwSwapInterval(1); // V-Sync
+        glfwSwapInterval(0); // V-Sync off
         GL.createCapabilities();
 
         int[] w = new int[1];
@@ -103,6 +103,10 @@ public class RenderManager implements Runnable {
         // Generiert den 1x1 Pixel Atlas einfriersicher
         TextureAtlasGenerator.generateAtlas(1);
 
+        ShaderPipeline depthShader = new ShaderPipeline(
+                "src/main/resources/shaders/main_v.glsl",
+                "src/main/resources/shaders/depth_f.glsl"
+        );
 
         ShaderPipeline mainShader = new ShaderPipeline(
                 "src/main/resources/shaders/main_v.glsl",
@@ -160,7 +164,6 @@ public class RenderManager implements Runnable {
 
             float auroraNoise = (float) Math.cos(dayTimeAngle * 0.15f) * 0.6f + 0.4f;
             float auroraActivity = Math.max(0.0f, Math.min(1.0f, auroraNoise));
-            auroraActivity = 0;
 
             // Wenn die Aktivität unter einen Schwellenwert fällt, bleibt es komplett dunkel
             if (auroraActivity < 0.25f) {
@@ -208,7 +211,7 @@ public class RenderManager implements Runnable {
             glDepthFunc(GL_LESS);
 
             // 3. Zeichnen (Nutzt jetzt das blitzschnelle Frustum Culling)
-            renderLevel(level, mainShader,skyboxShader, transparentShader, camera,
+            renderLevel(level, mainShader,skyboxShader, transparentShader,depthShader, camera,
                     textureAtlas, sunDirection, sunColor, auroraActivity);
 
             glfwSwapBuffers(window);
@@ -242,7 +245,7 @@ public class RenderManager implements Runnable {
     }
 
     private void renderLevel(Level level, ShaderPipeline mainPipeline,ShaderPipeline skyPipeline,
-                             ShaderPipeline transparentPipeline,
+                             ShaderPipeline transparentPipeline, ShaderPipeline depthShader,
                              Camera camera, Texture atlasTexture, Vector3f sunDir, Vector3f sunColor, float auroraActivity) {
 
         this.visibleChunksCount = 0;
@@ -259,18 +262,43 @@ public class RenderManager implements Runnable {
         }
 
         // =================================================================
-        // DURCHGANG 1: DIE SOLIDEN BLÖCKE (Main Shader Pipeline)
+        // DURCHGANG 1: Z-PREPASS (Nur Tiefe berechnen, keine Farben)
+        // =================================================================
+        depthShader.bind();
+        // Übergreife das Standard-Setup für Matrizen (keine Licht-Uniforms nötig!)
+        setupCommonUniforms(depthShader, camera,sunDir, sunColor, identityMatrix);
+
+        glDepthMask(true);                    // Tiefenpuffer-Schreiben erlauben
+        glEnable(GL_CULL_FACE);
+        glDepthFunc(GL_LESS);                 // Standard-Tiefenfunktion
+
+        // FÄRBUNG DEAKTIVIEREN: Die GPU sperrt die Ausgabe in den Bildpuffer
+        glColorMask(false, false, false, false);
+
+        // Zeichne alle sichtbaren soliden Chunks (ohne zu zählen, da 1b identisch ist)
+        renderAllVisibleChunks(level, depthShader, frustum, dims, false);
+
+
+        // =================================================================
+        // DURCHGANG 2: DIE SOLIDEN BLÖCKE (Main Shader Pipeline)
         // =================================================================
         mainPipeline.bind();
         setupCommonUniforms(mainPipeline, camera, sunDir, sunColor, identityMatrix);
 
-        glDepthMask(true);
+        glColorMask(true, true, true, true);
+
+        glDepthMask(false);
+
+        glDepthFunc(GL_LEQUAL);
         glEnable(GL_CULL_FACE);
 
         renderAllVisibleChunks(level, mainPipeline, frustum, dims, true);
 
+        glDepthFunc(GL_LESS);
+        glDepthMask(true);
+
         // =================================================================
-        // DURCHGANG 2: FULLSCREEN SKYBOX
+        // DURCHGANG 3: FULLSCREEN SKYBOX
         // =================================================================
         skyPipeline.bind();
 
@@ -311,7 +339,7 @@ public class RenderManager implements Runnable {
         glDepthFunc(GL_LESS);
 
         // =================================================================
-        // DURCHGANG 3: DAS TRANSPARENTE WASSER (Transparent Shader Pipeline)
+        // DURCHGANG 4: DAS TRANSPARENTE WASSER (Transparent Shader Pipeline)
         // =================================================================
         transparentPipeline.bind();
         setupCommonUniforms(transparentPipeline, camera, sunDir, sunColor, identityMatrix);
