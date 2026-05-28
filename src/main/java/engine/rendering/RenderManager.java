@@ -8,10 +8,10 @@ import engine.world.VoxelChunk;
 import logger.Logger;
 import logger.LoggerFactory;
 import org.jetbrains.annotations.NotNull;
-import org.joml.FrustumIntersection;
-import org.joml.Vector3f;
-import org.joml.Vector3i;
+import org.joml.*;
 import org.lwjgl.opengl.*;
+
+import java.lang.Math;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL30.*;
@@ -168,6 +168,11 @@ public class RenderManager implements Runnable {
                 "src/main/resources/shaders/outline_f.glsl"
         );
 
+        ShaderPipeline hudShader = new ShaderPipeline(
+                "src/main/resources/shaders/hud_v.glsl",
+                "src/main/resources/shaders/hud_f.glsl"
+        );
+
 
         Texture textureAtlas = new Texture("src/main/generated/textureAtlas.png");
 
@@ -259,8 +264,8 @@ public class RenderManager implements Runnable {
             glDepthFunc(GL_LESS);
 
             // 3. Zeichnen (Nutzt jetzt das blitzschnelle Frustum Culling)
-            renderLevel(level, mainShader,skyboxShader, transparentShader, depthShader, outlineShader, input,
-                    camera, textureAtlas, sunDirection, sunColor, auroraActivity);
+            renderLevel(level, mainShader,skyboxShader, transparentShader, depthShader, outlineShader,hudShader,
+                    input, camera, textureAtlas, sunDirection, sunColor, auroraActivity);
 
             glfwSwapBuffers(window);
             glfwPollEvents();
@@ -293,7 +298,7 @@ public class RenderManager implements Runnable {
     }
 
     private void renderLevel(Level level, ShaderPipeline mainPipeline,ShaderPipeline skyPipeline, ShaderPipeline transparentPipeline,
-                             ShaderPipeline depthShader, ShaderPipeline outlineShader, InputManager input,
+                             ShaderPipeline depthShader, ShaderPipeline outlineShader,ShaderPipeline hudShader, InputManager input,
                              Camera camera, Texture atlasTexture, Vector3f sunDir, Vector3f sunColor, float auroraActivity) {
 
         this.visibleChunksCount = 0;
@@ -420,6 +425,39 @@ public class RenderManager implements Runnable {
 
             org.lwjgl.opengl.GL30.glBindVertexArray(0);
         }
+
+        // =================================================================
+        // DURCHGANG 6: NEU - 2D HUD RENDERING (Ganz oben auf dem Bildschirm)
+        // =================================================================
+        glDisable(GL_DEPTH_TEST); // HUD darf niemals von 3D-Blöcken verdeckt werden!
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);  // Kein Culling für 2D-Flächen
+
+        hudShader.bind();
+
+        // Erzeuge eine orthografische Projektion exakt in deiner aktuellen Pixel-Fenstergröße
+        // Oben-Links ist (0,0), Unten-Rechts ist (width, height)
+        org.joml.Matrix4f orthoMatrix = new org.joml.Matrix4f().ortho(0.0f, this.width, this.height, 0.0f, -1.0f, 1.0f);
+        hudShader.setUniform("ortho", orthoMatrix);
+
+        // --- BEISPIEL 1: EIN PERFEKTES FADENKREUZ IN DER MITTE ---
+        float crosshairSize = 16.0f; // 16x16 Pixel groß
+        float centerX = (this.width / 2.0f) - (crosshairSize / 2.0f);
+        float centerY = (this.height / 2.0f) - (crosshairSize / 2.0f);
+
+        hudShader.setUniform("position", new Vector2f(centerX, centerY));
+        hudShader.setUniform("size", new Vector2f(crosshairSize, crosshairSize));
+        hudShader.setUniform("colorModifier", new Vector4f(1.0f, 1.0f, 1.0f, 0.8f)); // Weiß, leicht transparent
+        hudShader.setUniform("useTexture", false); // Reines Farb-Fadenkreuz ohne Texturaufwand
+
+        dummyVAO = org.lwjgl.opengl.GL30.glGenVertexArrays();
+        org.lwjgl.opengl.GL30.glBindVertexArray(dummyVAO);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        org.lwjgl.opengl.GL30.glBindVertexArray(0);
+        org.lwjgl.opengl.GL30.glDeleteVertexArrays(dummyVAO);
 
         // =================================================================
         // OPENGL STATE ZURÜCKSETZEN

@@ -5,9 +5,7 @@ import engine.object.Object;
 import engine.util.Camera;
 import logger.Logger;
 import logger.LoggerFactory;
-import org.joml.Matrix4f;
-import org.joml.Vector3f;
-import org.joml.Vector3i;
+import org.joml.*;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.system.MemoryStack;
 
@@ -109,6 +107,18 @@ public class ShaderPipeline {
         glUniform1i(getUniformLocation(name), value);
     }
 
+    public void setUniform(String name, Vector2f value) {
+        glUniform2f(getUniformLocation(name), value.x, value.y);
+    }
+
+    public void setUniform(String name, Vector4f value) {
+        glUniform4f(getUniformLocation(name), value.x, value.y, value.z, value.w);
+    }
+
+    public void setUniform(String name, boolean value) {
+        glUniform1i(getUniformLocation(name), value ? 1 : 0);
+    }
+
     public void setUniform(String name, Matrix4f[] matrices) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer buffer = stack.mallocFloat(matrices.length * 16);
@@ -137,4 +147,7 @@ public class ShaderPipeline {
     public void cleanup() {
         glDeleteProgram(programId);
     }
+
+
+
 }
