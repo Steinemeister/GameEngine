@@ -29,7 +29,7 @@ public class RenderManager implements Runnable {
     private double lastFrameTime = 0.0;
     private float deltaTime = 1.0f;
 
-    private float dayTimeAngle = 0.0f;
+    private float dayTimeAngle = (float) (0 - Math.PI);
 
     private double fpsTimer = 0.0;
     private int fpsCounter = 0;
@@ -129,8 +129,7 @@ public class RenderManager implements Runnable {
 
         camera.setPos(new Vector3f(0, 90, 0));
 
-        // NEU: Initialer Aufruf mit der Startposition der Kamera und Sichtradius (z.B. 4 Chunks weit)
-        int viewRadius = 20;
+        int viewRadius = 30;
         level.updateVisibleChunks(camera.getPosition(), viewRadius);
 
         InputManager input = new InputManager(window);
@@ -148,7 +147,7 @@ public class RenderManager implements Runnable {
             deltaTime = (float) (thisFrameTime - lastFrameTime);
             lastFrameTime = thisFrameTime;
 
-            dayTimeAngle += deltaTime * 0.25f;
+            dayTimeAngle += deltaTime * 0.01f;
             if (dayTimeAngle > Math.PI * 2) {
                 dayTimeAngle -= (float) (Math.PI * 2);
             }
@@ -161,6 +160,7 @@ public class RenderManager implements Runnable {
 
             float auroraNoise = (float) Math.cos(dayTimeAngle * 0.15f) * 0.6f + 0.4f;
             float auroraActivity = Math.max(0.0f, Math.min(1.0f, auroraNoise));
+            auroraActivity = 0;
 
             // Wenn die Aktivität unter einen Schwellenwert fällt, bleibt es komplett dunkel
             if (auroraActivity < 0.25f) {
@@ -348,7 +348,7 @@ public class RenderManager implements Runnable {
     private void renderAllVisibleChunks(Level level, ShaderPipeline pipeline,
                                         FrustumIntersection frustum, Vector3i dims, boolean count) {
         for (VoxelChunk chunk : level.getActiveChunks().values()) {
-            //if (chunk.isFullyOccluded()) continue;
+            if (chunk.isFullyOccluded()) continue;
 
             Mesh chunkMesh = chunk.getMesh();
             if (chunkMesh == null || chunkMesh.vertexCount() == 0) continue;

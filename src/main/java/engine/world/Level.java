@@ -5,8 +5,8 @@ import engine.worldGen.WorldGen;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -19,6 +19,8 @@ public class Level {
 
     // Thread-Pool für die Hintergrund-Berechnung (Nutzt so viele Threads wie CPU-Kerne vorhanden sind)
     private final ExecutorService threadPool;
+
+    private final Set<Vector3i> chunksInGeneration = ConcurrentHashMap.newKeySet();
 
     private final WorldGen worldGen;
 
@@ -51,11 +53,12 @@ public class Level {
         java.util.Map<org.joml.Vector3i, VoxelChunk> newActiveChunks = new java.util.HashMap<>();
 
         // WICHTIG: Der Lade-Radius im Hintergrund ist um 1 größer als der Sicht-Radius!
-        int generationRadius = viewRadius + 1;
+        int hGenerationRadius = viewRadius + 1;
+        int vGenerationRadius = viewRadius - 15;
 
-        for (int x = -generationRadius; x <= generationRadius; x++) {
-            for (int y = -generationRadius; y <= generationRadius; y++) {
-                for (int z = -generationRadius; z <= generationRadius; z++) {
+        for (int x = -hGenerationRadius; x <= hGenerationRadius; x++) {
+            for (int z = -hGenerationRadius; z <= hGenerationRadius; z++) {
+                for (int y = -vGenerationRadius; y <= vGenerationRadius; y++) {
                     int cx = centerChunk.x + x;
                     int cy = centerChunk.y + y;
                     int cz = centerChunk.z + z;
@@ -64,24 +67,33 @@ public class Level {
                     VoxelChunk chunk = activeChunks.get(chunkKey);
 
                     if (chunk == null) {
-                        VoxelChunk newChunk = new VoxelChunk(chunkDimensions, chunkKey);
-                        activeChunks.put(chunkKey, newChunk);
-                        chunk = newChunk;
-
-                        threadPool.submit(() -> {
-                            synchronized (newChunk) {
-                                generateTerrainForChunk(newChunk);
-                                newChunk.setReadyToUpload(true);
-                            }
-                        });
+                        // TRICK: .add() gibt true zurück, wenn die Position NEU ist.
+                        // Wenn sie schon drin steht, wird der gesamte Block komplett übersprungen!
+                        if (chunksInGeneration.add(chunkKey)) {
+                            threadPool.submit(() -> {
+                                try {
+                                    VoxelChunk generatedChunk = worldGen.genChunkAt(chunkKey);
+                                    if (generatedChunk != null) {
+                                        generatedChunk.setReadyToUpload(true);
+                                        activeChunks.put(chunkKey, generatedChunk);
+                                    }
+                                } finally {
+                                    // Wenn der Thread fertig (oder abgestürzt) ist,
+                                    // geben wir die Position für die Zukunft wieder frei
+                                    chunksInGeneration.remove(chunkKey);
+                                }
+                            });
+                        }
                     }
 
-                    // NUR Chunks, die innerhalb des echten Sicht-Radius liegen,
-                    // werden in die aktive Render-Liste übernommen!
-                    if (Math.abs(x) <= viewRadius && Math.abs(y) <= viewRadius && Math.abs(z) <= viewRadius) {
+                    if (chunk != null &&
+                            Math.abs(x) <= viewRadius &&
+                            Math.abs(y) <= viewRadius &&
+                            Math.abs(z) <= viewRadius) {
                         newActiveChunks.put(chunkKey, chunk);
                     }
                 }
+
             }
         }
 
@@ -92,7 +104,7 @@ public class Level {
             int dy = Math.abs(k.y - centerChunk.y);
             int dz = Math.abs(k.z - centerChunk.z);
 
-            if (dx > generationRadius || dy > generationRadius || dz > generationRadius) {
+            if (dx > hGenerationRadius || dy > hGenerationRadius || dz > hGenerationRadius) {
                 VoxelChunk removed = activeChunks.remove(k);
                 if (removed != null) removed.cleanup();
             }
@@ -105,7 +117,7 @@ public class Level {
      */
     public void uploadPendingTextures(Vector3f playerWorldPos) {
         int uploadsThisFrame = 0;
-        int maxUploadsPerFrame = 2;
+        int maxUploadsPerFrame = 8;
 
         java.util.List<VoxelChunk> pendingChunks = new java.util.ArrayList<>();
         for (VoxelChunk chunk : activeChunks.values()) {
@@ -161,55 +173,8 @@ public class Level {
         }
     }
 
-    public void generateTerrainForChunk(VoxelChunk chunk) {
-        org.joml.Vector3i chunkPos = chunk.getChunkPosition();
-        org.joml.Vector3i dims = chunk.getDimensions();
-
-        int worldXOffset = chunkPos.x * dims.x;
-        int worldYOffset = chunkPos.y * dims.y;
-        int worldZOffset = chunkPos.z * dims.z;
-
-        boolean hasVoxels = false;
-
-        // Iteration über alle lokalen Voxel-Koordinaten des Chunks
-        for (int x = 0; x < dims.x; x++) {
-            int worldX = worldXOffset + x;
-
-            for (int z = 0; z < dims.z; z++) {
-                int worldZ = worldZOffset + z;
-
-                for (int y = 0; y < dims.y; y++) {
-                    int worldY = worldYOffset + y;
-
-                    // Hole die Block-ID für die globalen Weltkoordinaten
-                    byte blockId = worldGen.getBlockAt(worldX, worldY, worldZ);
-
-                    // Nur feste Blöcke (alles außer Luft = 0) im Chunk platzieren
-                    if (blockId != WorldGen.BLOCK_AIR) {
-                        chunk.setVoxel(x, y, z, blockId);
-                    }
-
-                }
-            }
-        }
-
-        boolean containsNonAir = false;
-
-        for (int i = 0; i < dims.x * dims.y * dims.z; i++) {
-            // Da VoxelChunk intern ein byte[] nutzt, fragen wir die Koordinaten ab:
-            int cx = i % dims.x;
-            int cy = (i / dims.x) % dims.y;
-            int cz = i / (dims.x * dims.y);
-
-            byte id = chunk.getVoxel(cx, cy, cz);
-            if (id != 0) {
-                containsNonAir = true;
-            }
-        }
-
-        // Wenn der Chunk NUR Luft enthält (im Himmel) ODER NUR feste Blöcke OHNE Höhlenlöcher:
-        chunk.setFullyOccluded(!containsNonAir);
-        //chunk.setFullyOccluded(false);
+    public VoxelChunk generateTerrainForChunk(Vector3i chunkPos) {
+        return worldGen.genChunkAt(chunkPos);
     }
 
     public void generateAllMeshes() { /* Unused, da asynchron geladen wird */ }

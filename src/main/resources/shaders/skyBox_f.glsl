@@ -16,7 +16,7 @@ const vec2 seed = vec2(1337.0, 42.0);
 // PHYSIKALISCHE & KOSMISCHE PARAMETER
 // =========================================================================
 const vec3 SUN_BASE_COLOR     = vec3(1.0, 0.96, 0.88);
-const vec3 ATMOSPHERE_SCATTER = vec3(0.16, 0.40, 0.85);
+const vec3 ATMOSPHERE_SCATTER = vec3(0.16, 0.40, 0.95);
 const float MOON_ALBEDO        = 0.25;
 
 const vec3 SPACE_COLOR_TOP    = vec3(0.001, 0.002, 0.005);
@@ -144,24 +144,33 @@ vec3 calculateMilkyWay(vec3 dir, float nightFactor, float solarEclipse) {
     float visibility = max(nightFactor, solarEclipse);
     if (dir.y <= -0.05 || visibility < 0.01) return vec3(0.0);
 
+    // Kosmisches Band um ca. 60 Grad neigen, damit es organisch über den Himmel verläuft
     vec3 rotatedDir = dir;
     float angle = 1.05;
     float s = sin(angle); float c = cos(angle);
     rotatedDir.x = dir.x * c - dir.z * s;
     rotatedDir.z = dir.x * s + dir.z * c;
 
+    // UV-Koordinaten für das kosmische Band berechnen
     vec2 galaxyUV = vec2(atan(rotatedDir.x, rotatedDir.z) * 1.5, rotatedDir.y * 3.0);
-    galaxyUV += vec2(sin(seed.x * 0.05), cos(seed.y * 0.05));
 
-    float band = smoothstep(0.7, 0.0, abs(rotatedDir.y - 0.15));
+    // Berechne die Breite und Intensität des galaktischen Bandes
+    float band = smoothstep(0.6, 0.0, abs(rotatedDir.y - 0.12));
     if (band <= 0.0) return vec3(0.0);
 
-    // Gaskonzentrationen und Staubstrukturen mittels FBM berechnen
-    float dust = fbm(galaxyUV * 2.5 + vec2(time * 0.01));
-    vec3 galaxyColor = vec3(0.2, 0.15, 0.35) * (dust * 1.5);
-    galaxyColor += vec3(0.1, 0.1, 0.25) * band;
+    // Fraktales Rauschen (FBM) simuliert dunkle Staubwolken und helle Sternencluster
+    float dust = fbm(galaxyUV * 2.5);
 
-    return galaxyColor * band * visibility * 0.35;
+    // Violett-bläulicher Grundton gemischt mit hellen Gaswolken-Zentren
+    vec3 galaxyColor = mix(vec3(0.05, 0.03, 0.12), vec3(0.25, 0.18, 0.35), dust);
+
+    // Extra Helligkeits-Core in der Mitte des Bandes
+    galaxyColor += vec3(0.15, 0.12, 0.20) * pow(band, 3.0);
+
+    // Am Horizont leicht ausfaden lassen, um harten Kanten am Boden vorzubeugen
+    float horizonFade = smoothstep(-0.05, 0.15, dir.y);
+
+    return galaxyColor * band * visibility * horizonFade * 0.45;
 }
 
 // 6. Prozedurale Polarlichter / Nordlichter (Hinzugefügt)

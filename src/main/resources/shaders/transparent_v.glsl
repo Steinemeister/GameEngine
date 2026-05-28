@@ -5,14 +5,12 @@ uniform mat4 projection;
 uniform ivec3 chunkDimensions;
 uniform vec3 chunkWorldPos;
 uniform usampler3D voxelTex3D;
-uniform float time;
 
 flat out uint BlockID;
 out vec3 FragPos;
 out vec2 TexCoords;
 out vec3 Normal;
 out vec3 ViewSpacePos;
-out float WaveHeight; // Wichtig für die Schaumkronen im Fragment-Shader
 
 const vec3 vertices[] = vec3[](
 vec3(0,0,0), vec3(1,0,0), vec3(1,1,0), vec3(0,1,0),
@@ -59,7 +57,7 @@ void main() {
         return;
     }
 
-    // --- CULLING FÜR WASSERBLÖCKE ---
+    // --- NACHBARSCHAFTS-CULLING ---
     ivec3 neighborTexPos = texPos + ivec3(faceNormals[faceIdx]);
     if (neighborTexPos.x >= 0 && neighborTexPos.x < (chunkDimensions.x + 2) &&
     neighborTexPos.y >= 0 && neighborTexPos.y < (chunkDimensions.y + 2) &&
@@ -76,23 +74,13 @@ void main() {
     vec3 localVertexPos = vertices[faceIndices[lookupIdx]];
     vec3 worldVertexPos = chunkWorldPos + vec3(localPos) + localVertexPos;
 
-    // --- WELLEN-BEWEGUNG (Wieder zurück im Vertex-Shader) ---
-    vec3 currentNormal = faceNormals[faceIdx];
-    float wave = 0.0;
-
-    if (currentNormal.y > 0.5) {
-        wave = sin(worldVertexPos.x * 0.8 + time * 1.5) * 0.08 +
-        cos(worldVertexPos.z * 0.6 + time * 1.2) * 0.06;
-        worldVertexPos.y += wave;
-    }
-
-    worldVertexPos += currentNormal * 0.002;
+    // Minimales Anheben gegen Z-Fighting an den Rändern
+    worldVertexPos += faceNormals[faceIdx] * 0.002;
 
     FragPos = worldVertexPos;
-    Normal = currentNormal;
+    Normal = faceNormals[faceIdx];
     TexCoords = uvCoords[vertexIdx];
     BlockID = blockType;
-    WaveHeight = wave;
     ViewSpacePos = vec3(view * vec4(worldVertexPos, 1.0));
 
     gl_Position = projection * view * vec4(worldVertexPos, 1.0);
