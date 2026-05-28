@@ -16,7 +16,6 @@ import org.lwjgl.opengl.*;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL30.*;
 import static org.lwjgl.glfw.GLFW.*;
-import static org.lwjgl.opengl.GL40.*;
 
 public class RenderManager implements Runnable {
     private Logger logger;
@@ -265,8 +264,8 @@ public class RenderManager implements Runnable {
         // DURCHGANG 1: Z-PREPASS (Nur Tiefe berechnen, keine Farben)
         // =================================================================
         depthShader.bind();
-        // Übergreife das Standard-Setup für Matrizen (keine Licht-Uniforms nötig!)
-        setupCommonUniforms(depthShader, camera,sunDir, sunColor, identityMatrix);
+        // Übergibt alle Matrizen, damit der neue Vertex-Shader korrekt entpacken kann
+        setupCommonUniforms(depthShader, camera, sunDir, sunColor, identityMatrix);
 
         glDepthMask(true);                    // Tiefenpuffer-Schreiben erlauben
         glEnable(GL_CULL_FACE);
@@ -275,8 +274,8 @@ public class RenderManager implements Runnable {
         // FÄRBUNG DEAKTIVIEREN: Die GPU sperrt die Ausgabe in den Bildpuffer
         glColorMask(false, false, false, false);
 
-        // Zeichne alle sichtbaren soliden Chunks (ohne zu zählen, da 1b identisch ist)
-        renderAllVisibleChunks(level, depthShader, frustum, dims, false);
+        // Zeichne alle sichtbaren soliden Chunks
+        renderAllVisibleChunks(level, depthShader, frustum, dims, false, false);
 
 
         // =================================================================
@@ -285,15 +284,20 @@ public class RenderManager implements Runnable {
         mainPipeline.bind();
         setupCommonUniforms(mainPipeline, camera, sunDir, sunColor, identityMatrix);
 
+        // FÄRBUNG REAKTIVIEREN
         glColorMask(true, true, true, true);
 
+        // Tiefenpuffer sperren (ist durch den Prepass schon perfekt befüllt!)
         glDepthMask(false);
 
+        // Nutzt LEQUAL wegen möglicher Rundungsfehler der GPU beim Bit-Unpacking
         glDepthFunc(GL_LEQUAL);
         glEnable(GL_CULL_FACE);
 
-        renderAllVisibleChunks(level, mainPipeline, frustum, dims, true);
+        // Jetzt echte Farben zeichnen und Chunks für den Titel zählen
+        renderAllVisibleChunks(level, mainPipeline, frustum, dims, true, false);
 
+        // Tiefenzustand zurücksetzen
         glDepthFunc(GL_LESS);
         glDepthMask(true);
 
@@ -302,13 +306,11 @@ public class RenderManager implements Runnable {
         // =================================================================
         skyPipeline.bind();
 
-        // 1. WICHTIG: Die Translation (Position) aus der View-Matrix entfernen
         org.joml.Matrix4f skyView = new org.joml.Matrix4f(camera.getView());
         skyView.m30(0); // X-Translation nullen
         skyView.m31(0); // Y-Translation nullen
         skyView.m32(0); // Z-Translation nullen
 
-        // Matrizen invertieren
         org.joml.Matrix4f invProjection = new org.joml.Matrix4f(camera.getProjection()).invert();
         org.joml.Matrix4f invView = skyView.invert();
 
@@ -323,18 +325,13 @@ public class RenderManager implements Runnable {
         glDisable(GL_CULL_FACE);
         glDepthFunc(GL_LEQUAL);
 
-        // 2. WICHTIG FÜR CORE PROFILE: Ein Dummy-VAO binden, sonst zeichnet OpenGL nichts!
-        // Falls du kein globales leeres VAO hast, kannst du hier testweise die ID 0 binden
-        // oder temporär ein temporäres nutzen. Am saubersten ist:
         int dummyVAO = org.lwjgl.opengl.GL30.glGenVertexArrays();
         org.lwjgl.opengl.GL30.glBindVertexArray(dummyVAO);
 
-        // Zeichnen
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        // Aufräumen
         org.lwjgl.opengl.GL30.glBindVertexArray(0);
-        org.lwjgl.opengl.GL30.glDeleteVertexArrays(dummyVAO); // In der Praxis einmalig in init() erzeugen!
+        org.lwjgl.opengl.GL30.glDeleteVertexArrays(dummyVAO);
 
         glDepthFunc(GL_LESS);
 
@@ -349,7 +346,7 @@ public class RenderManager implements Runnable {
         glDepthMask(false);
         glDisable(GL_CULL_FACE);
 
-        renderAllVisibleChunks(level, transparentPipeline, frustum, dims, false);
+        renderAllVisibleChunks(level, transparentPipeline, frustum, dims, false, true);
 
         // =================================================================
         // OPENGL STATE ZURÜCKSETZEN
@@ -374,36 +371,44 @@ public class RenderManager implements Runnable {
     }
 
     private void renderAllVisibleChunks(Level level, ShaderPipeline pipeline,
-                                        FrustumIntersection frustum, Vector3i dims, boolean count) {
+                                        FrustumIntersection frustum, Vector3i dims,
+                                        boolean count, boolean transparentMesh) {
         for (VoxelChunk chunk : level.getActiveChunks().values()) {
-            if (chunk.isFullyOccluded()) continue;
-
-            Mesh chunkMesh = chunk.getMesh();
-            if (chunkMesh == null || chunkMesh.vertexCount() == 0) continue;
 
             Vector3i cPos = chunk.getChunkPosition();
             float minX = cPos.x * dims.x;
             float minY = cPos.y * dims.y;
             float minZ = cPos.z * dims.z;
 
+            // CPU Frustum Culling
             if (frustum.intersectAab(minX, minY, minZ, minX + dims.x, minY + dims.y, minZ + dims.z) == FrustumIntersection.OUTSIDE) {
                 continue;
             }
 
-            if (count) visibleChunksCount++;
+            if (count) {
+                visibleChunksCount++;
+            }
 
+            // Dem Shader die Position mitteilen
             pipeline.setUniform("chunkWorldPos", new org.joml.Vector3f(minX, minY, minZ));
-            pipeline.setUniform("chunkDimensions", dims);
 
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_3D, chunk.getTexture3DId());
-
-            glBindVertexArray(chunkMesh.vao());
-
-            glDrawArrays(GL_TRIANGLES, 0, chunkMesh.vertexCount());
-
-
-            glBindVertexArray(0);
+            // =================================================================
+            // PASSED-BASED SEPARATION: Richtigen Grafikpuffer auswählen!
+            // =================================================================
+            if (transparentMesh) {
+                // Im Wasser-Durchgang wird AUSNAHMSLOS nur das Wasser-Mesh gerendert
+                Mesh waterMesh = chunk.getWaterMesh(); // Getter in VoxelChunk nutzen
+                if (waterMesh != null && waterMesh.vertexCount() > 0) {
+                    waterMesh.render();
+                }
+            } else {
+                // Im Prepass und im Solid Pass wird NUR das solide Mesh gerendert
+                Mesh solidMesh = chunk.getSolidMesh(); // Getter in VoxelChunk nutzen
+                if (solidMesh != null && solidMesh.vertexCount() > 0) {
+                    solidMesh.render();
+                }
+            }
+            // =================================================================
         }
     }
 }

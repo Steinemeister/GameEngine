@@ -3,9 +3,6 @@ package engine.world;
 import engine.object.Mesh;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
-import org.lwjgl.BufferUtils;
-
-import java.nio.ByteBuffer;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL12.*;
@@ -18,7 +15,8 @@ public class VoxelChunk {
     private final byte[] voxels; // Speichert Block-IDs (0 = Luft, 1 = Stein, 2 = Gras, etc.)
 
     private int texture3DId = 0; // Die ID der 3D-Textur auf der GPU
-    private Mesh chunkMesh;      // Unser "leeres" oder instanziertes Mesh
+    private Mesh solidMesh;
+    private Mesh waterMesh;
 
     private volatile boolean readyToUpload = false;
     private boolean isFullyOccluded = false;
@@ -149,12 +147,20 @@ public class VoxelChunk {
         }
     }
 
-    public Mesh getMesh() {
-        return chunkMesh;
+    public Mesh getSolidMesh() {
+        return solidMesh;
     }
 
-    public void setMesh(Mesh mesh) {
-        this.chunkMesh = mesh;
+    public void setSolidMesh(Mesh mesh) {
+        this.solidMesh = mesh;
+    }
+
+    public Mesh getWaterMesh() {
+        return waterMesh;
+    }
+
+    public void setWaterMesh(Mesh mesh) {
+        this.waterMesh = mesh;
     }
 
     public boolean isReadyToUpload() {

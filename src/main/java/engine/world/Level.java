@@ -121,14 +121,17 @@ public class Level {
 
         java.util.List<VoxelChunk> pendingChunks = new java.util.ArrayList<>();
         for (VoxelChunk chunk : activeChunks.values()) {
-            if (chunk.isReadyToUpload() && chunk.getMesh() == null && !chunk.isFullyOccluded()) {
+            // KORREKTUR: Ein Chunk gilt als ausstehend, wenn er bereit ist (vom Hintergrund-Thread),
+            // aber weder das Solid- noch das Water-Mesh auf der GPU initialisiert wurden.
+            // Vollständig verdeckte Chunks (FullyOccluded) springen wir weiterhin über.
+            if (chunk.isReadyToUpload() && chunk.getSolidMesh() == null && chunk.getWaterMesh() == null && !chunk.isFullyOccluded()) {
                 pendingChunks.add(chunk);
             }
         }
 
         if (pendingChunks.isEmpty()) return;
 
-        // Nach Nähe zum Spieler sortieren
+        // Nach Nähe zum Spieler sortieren (Identisch)
         org.joml.Vector3i dims = getChunkDimensions();
         pendingChunks.sort((c1, c2) -> {
             float c1X = (c1.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
@@ -146,23 +149,39 @@ public class Level {
         org.joml.Vector3i neighborKey = new org.joml.Vector3i();
 
         for (VoxelChunk chunk : pendingChunks) {
-            Mesh dummyMesh = ChunkMeshGenerator.generateMesh(chunk, this);
-            chunk.setMesh(dummyMesh);
+            // KORREKTUR: Semikolon hinzugefügt und Übergabe des Levels (this) korrigiert,
+            // damit der Generator das Cross-Chunk-Culling fehlerfrei berechnen kann.
+            ChunkMeshGenerator.ChunkMeshResult result = ChunkMeshGenerator.generateMeshes(chunk, this);
+
+            // Beide generierten Meshes im Chunk-Objekt hinterlegen
+            chunk.setSolidMesh(result.solidMesh());
+            chunk.setWaterMesh(result.waterMesh());
 
             // 1. Eigene Textur hochladen
             chunk.update3DTexture(this);
             chunk.setReadyToUpload(false);
 
-            // 2. --- WICHTIG: DIE NACHBARN TRIGGERN ---
+            // 2. --- DIE NACHBARN TRIGGERN ---
             org.joml.Vector3i cPos = chunk.getChunkPosition();
             for (int[] d : directions) {
                 neighborKey.set(cPos.x + d[0], cPos.y + d[1], cPos.z + d[2]);
                 VoxelChunk neighbor = activeChunks.get(neighborKey);
 
-                // Wenn der Nachbar bereits auf der GPU gerendert wird, muss er seine
-                // 3D-Textur neu beladen, um die Kanten-Werte von uns einzulesen!
-                if (neighbor != null && neighbor.getMesh() != null) {
+                // KORREKTUR: Ein Nachbar gilt als aktiv gerendert, wenn er mindestens
+                // eines der beiden Meshes besitzt (Solid oder Wasser).
+                if (neighbor != null && (neighbor.getSolidMesh() != null || neighbor.getWaterMesh() != null)) {
                     neighbor.update3DTexture(this);
+
+                    // PRO-TIPP FÜR CPU-CULLING: Wenn ein neuer Chunk geladen wird,
+                    // verändert er die Sichtbarkeit der äußeren Flächen seiner Nachbar-Chunks!
+                    // Um Löcher an alten Chunkgrenzen zu vermeiden, regenerieren wir hier optional
+                    // das CPU-Mesh des Nachbarn, falls dieser bereits sichtbar war:
+                    /*
+                    neighbor.cleanupMeshes(); // Altes VBO/VAO löschen, um RAM-Lecks zu vermeiden
+                    ChunkMeshGenerator.ChunkMeshResult nResult = ChunkMeshGenerator.generateMeshes(neighbor, this);
+                    neighbor.setSolidMesh(nResult.solidMesh());
+                    neighbor.setWaterMesh(nResult.waterMesh());
+                    */
                 }
             }
 
@@ -172,12 +191,6 @@ public class Level {
             }
         }
     }
-
-    public VoxelChunk generateTerrainForChunk(Vector3i chunkPos) {
-        return worldGen.genChunkAt(chunkPos);
-    }
-
-    public void generateAllMeshes() { /* Unused, da asynchron geladen wird */ }
 
     public void cleanup() {
         threadPool.shutdownNow(); // Threads beenden
@@ -197,7 +210,7 @@ public class Level {
             // synchronized zwingt die CPU, den Cache aller Kerne sofort abzugleichen!
             // Das verhindert, dass unfertige oder veraltete Block-Daten gelesen werden.
             synchronized (chunk) {
-                if (chunk.isReadyToUpload() || chunk.getMesh() != null) {
+                if (chunk.isReadyToUpload() || chunk.getSolidMesh() != null) {
                     org.joml.Vector3i localPos = new org.joml.Vector3i();
                     chunk.worldToLocalCoordinate(worldPos, localPos);
                     return chunk.getVoxel(localPos.x, localPos.y, localPos.z);
