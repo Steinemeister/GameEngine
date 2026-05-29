@@ -39,33 +39,11 @@ public class InputManager {
     private static final double BREAK_COOLDOWN = 0.25; // 250 Millisekunden Sperre fürs Abbauen
     private static final double PLACE_COOLDOWN = 0.20;
 
-    private int selectedSlot = 0;
-
-    private static final byte[] HOTBAR_BLOCKS = { 1, 2, 3, 4 };
-
     private RaycastResult lastRaycastResult = new RaycastResult();
 
     public InputManager(long window) {
         this.window = window;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
-        glfwSetScrollCallback(window, (windowHandle1, xOffset, yOffset) -> {
-            // yOffset > 0 bedeutet nach oben gescrollt, yOffset < 0 nach unten
-            if (yOffset > 0) {
-                selectedSlot--;
-                if (selectedSlot < 0) {
-                    selectedSlot = HOTBAR_BLOCKS.length - 1; // Am Ende wieder anfangen
-                }
-            } else if (yOffset < 0) {
-                selectedSlot++;
-                if (selectedSlot >= HOTBAR_BLOCKS.length) {
-                    selectedSlot = 0; // Am Anfang wieder anfangen
-                }
-            }
-
-            // Optional: Zeige den Wechsel direkt in der Konsole oder logge ihn
-            // System.out.println("Slot gewechselt zu: " + selectedSlot + " (Block-ID: " + HOTBAR_BLOCKS[selectedSlot] + ")");
-        });
     }
 
     public void updateMouse() {
@@ -103,10 +81,9 @@ public class InputManager {
         }
 
         // Platzieren (Rechtsklick) - Funktioniert nur nach Ablauf des Cooldowns
-        if (org.lwjgl.glfw.GLFW.glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == org.lwjgl.glfw.GLFW.GLFW_PRESS) {
+        if (org.lwjgl.glfw.GLFW.glfwGetMouseButton(window, org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_RIGHT) == org.lwjgl.glfw.GLFW.GLFW_PRESS) {
             if (currentTime - lastPlaceTime >= PLACE_COOLDOWN) {
-                byte blockToPlace = HOTBAR_BLOCKS[selectedSlot];
-                level.setVoxelAtWorldPos(lastRaycastResult.adjacentPos, blockToPlace); // Platziere Stein
+                level.setVoxelAtWorldPos(lastRaycastResult.adjacentPos, (byte) 1); // Platziere Stein
                 lastPlaceTime = currentTime; // Timer zurücksetzen
             }
         }
@@ -271,9 +248,5 @@ public class InputManager {
 
     public RaycastResult getLastRaycastResult() {
         return lastRaycastResult;
-    }
-
-    public int getSelectedSlot() {
-        return selectedSlot;
     }
 }

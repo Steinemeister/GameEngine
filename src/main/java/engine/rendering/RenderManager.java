@@ -37,8 +37,6 @@ public class RenderManager implements Runnable {
 
     private int outlineVAO;
 
-    private int dummyVAO;
-
 
 
     public void run() {
@@ -99,10 +97,10 @@ public class RenderManager implements Runnable {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        initGeometry();
+        initOutlineGeometry();
     }
 
-    private void initGeometry() {
+    private void initOutlineGeometry() {
         // Die 8 Ecken eines 1x1x1 Würfels, leicht aufgebläht (1.002f) gegen Z-Fighting auf der Blockoberfläche
         float min = -0.001f;
         float max = 1.001f;
@@ -132,17 +130,11 @@ public class RenderManager implements Runnable {
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
 
-        glVertexAttribPointer(0, 3, GL_FLOAT, false, 0, 0);
-        glEnableVertexAttribArray(0);
+        org.lwjgl.opengl.GL20.glVertexAttribPointer(0, 3, org.lwjgl.opengl.GL11.GL_FLOAT, false, 0, 0);
+        org.lwjgl.opengl.GL20.glEnableVertexAttribArray(0);
 
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindVertexArray(0);
-
-        dummyVAO = glGenVertexArrays();
-        glBindVertexArray(dummyVAO);
-
-        glBindVertexArray(0);
-        glDeleteVertexArrays(dummyVAO);
+        org.lwjgl.opengl.GL15.glBindBuffer(org.lwjgl.opengl.GL15.GL_ARRAY_BUFFER, 0);
+        org.lwjgl.opengl.GL30.glBindVertexArray(0);
     }
 
     private void loop() {
@@ -456,7 +448,7 @@ public class RenderManager implements Runnable {
 
         hudShader.setUniform("position", new Vector2f(centerX, centerY));
         hudShader.setUniform("size", new Vector2f(crosshairSize, crosshairSize));
-        hudShader.setUniform("colorModifier", new Vector4f(1.0f, 1.0f, 1.0f, 0.5f)); // Weiß, leicht transparent
+        hudShader.setUniform("colorModifier", new Vector4f(1.0f, 1.0f, 1.0f, 0.8f)); // Weiß, leicht transparent
         hudShader.setUniform("useTexture", false); // Reines Farb-Fadenkreuz ohne Texturaufwand
 
         dummyVAO = org.lwjgl.opengl.GL30.glGenVertexArrays();
@@ -475,10 +467,7 @@ public class RenderManager implements Runnable {
         glActiveTexture(GL_TEXTURE0);
     }
 
-
-
-    private void setupCommonUniforms(ShaderPipeline pipeline, Camera camera,
-                                     Vector3f sunDir, Vector3f sunColor, Matrix4f modelMatrix) {
+    private void setupCommonUniforms(ShaderPipeline pipeline, Camera camera, Vector3f sunDir, Vector3f sunColor, org.joml.Matrix4f modelMatrix) {
         pipeline.setUniform("textureAtlas", 0);
         pipeline.setUniform("voxelTex3D", 1);
         pipeline.setUniform("model", modelMatrix);
@@ -519,13 +508,13 @@ public class RenderManager implements Runnable {
             // =================================================================
             if (transparentMesh) {
                 // Im Wasser-Durchgang wird AUSNAHMSLOS nur das Wasser-Mesh gerendert
-                Mesh waterMesh = chunk.getAnyAvailableWaterMesh(); // Getter in VoxelChunk nutzen
+                Mesh waterMesh = chunk.getWaterMesh(); // Getter in VoxelChunk nutzen
                 if (waterMesh != null && waterMesh.vertexCount() > 0) {
                     waterMesh.render();
                 }
             } else {
                 // Im Prepass und im Solid Pass wird NUR das solide Mesh gerendert
-                Mesh solidMesh = chunk.getAnyAvailableSolidMesh(); // Getter in VoxelChunk nutzen
+                Mesh solidMesh = chunk.getSolidMesh(); // Getter in VoxelChunk nutzen
                 if (solidMesh != null && solidMesh.vertexCount() > 0) {
                     solidMesh.render();
                 }

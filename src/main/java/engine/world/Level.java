@@ -6,7 +6,8 @@ import engine.worldGen.WorldGen;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
 
-import java.util.*;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -14,11 +15,13 @@ import java.util.concurrent.Executors;
 public class Level {
     private final Vector3i chunkDimensions;
 
+    // Thread-sichere Map für Chunks, da der Hintergrund-Thread darauf zugreift
     private final Map<Vector3i, VoxelChunk> activeChunks;
 
+    // Thread-Pool für die Hintergrund-Berechnung (Nutzt so viele Threads wie CPU-Kerne vorhanden sind)
     private final ExecutorService threadPool;
 
-    private final Set<String> chunksInGeneration = ConcurrentHashMap.newKeySet();
+    private final Set<Vector3i> chunksInGeneration = ConcurrentHashMap.newKeySet();
 
     private final WorldGen worldGen;
 
@@ -27,35 +30,30 @@ public class Level {
         this.activeChunks = new ConcurrentHashMap<>();
         this.threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() - 2);
 
-        this.worldGen = new WorldGen(new Random().nextLong());
+        this.worldGen = new WorldGen(1337L);
     }
-
-    private String makeGenKey(Vector3i pos, int lod) {
-        return pos.x + "," + pos.y + "," + pos.z + "_" + lod;
-    }
-
-    private int calculateTargetLod(int x, int y, int z, int viewRadius) {
-        int maxDist = Math.max(Math.abs(x), Math.max(Math.abs(y), Math.abs(z)));
-        if (maxDist <= viewRadius / 3) {
-            return 1;  // Volle Details nah am Spieler
-        } else if (maxDist <= (viewRadius * 2) / 3) {
-            return 2;  // Mittlere Details
-        } else {
-            return 4;  // Geringe Details auf Distanz
-        }
-    }
-
-
 
     public VoxelChunk loadChunk(int cx, int cy, int cz) {
         Vector3i pos = new Vector3i(cx, cy, cz);
-        return activeChunks.computeIfAbsent(pos, p -> new VoxelChunk(chunkDimensions, p));
+        if (activeChunks.containsKey(pos)) {
+            return activeChunks.get(pos);
+        }
+        VoxelChunk chunk = new VoxelChunk(chunkDimensions, pos);
+        activeChunks.put(pos, chunk);
+        return chunk;
     }
 
+    /**
+     * Scannt die Welt im 3D-Radius ab und lagert die rechenintensive Generierung
+     * auf Hintergrund-Threads aus.
+     */
     public void updateVisibleChunks(Vector3f centerWorldPos, int viewRadius) {
-        Vector3i centerChunk = new Vector3i();
+        org.joml.Vector3i centerChunk = new org.joml.Vector3i();
         VoxelChunk.getChunkPositionFromWorld(centerWorldPos, chunkDimensions, centerChunk);
 
+        java.util.Map<org.joml.Vector3i, VoxelChunk> newActiveChunks = new java.util.HashMap<>();
+
+        // WICHTIG: Der Lade-Radius im Hintergrund ist um 1 größer als der Sicht-Radius!
         int hGenerationRadius = viewRadius + 1;
         int vGenerationRadius = viewRadius - 15;
 
@@ -66,72 +64,43 @@ public class Level {
                     int cy = centerChunk.y + y;
                     int cz = centerChunk.z + z;
 
-                    Vector3i chunkKey = new Vector3i(cx, cy, cz);
-                    int targetLod = calculateTargetLod(x, y, z, viewRadius);
+                    org.joml.Vector3i chunkKey = new org.joml.Vector3i(cx, cy, cz);
                     VoxelChunk chunk = activeChunks.get(chunkKey);
 
-                    // Fall 1: Der Chunk existiert noch gar nicht
                     if (chunk == null) {
-                        String genKey = makeGenKey(chunkKey, targetLod);
-                        if (chunksInGeneration.add(genKey)) {
+                        // TRICK: .add() gibt true zurück, wenn die Position NEU ist.
+                        // Wenn sie schon drin steht, wird der gesamte Block komplett übersprungen!
+                        if (chunksInGeneration.add(chunkKey)) {
                             threadPool.submit(() -> {
                                 try {
                                     VoxelChunk generatedChunk = worldGen.genChunkAt(chunkKey);
                                     if (generatedChunk != null) {
-                                        generatedChunk.setLod(targetLod);
-                                        // ASYNCHRONES MESHING: Direkt im Thread berechnen
-                                        ChunkMeshGenerator.ChunkMeshResult result = ChunkMeshGenerator.generateMeshes(generatedChunk, this);
-                                        generatedChunk.setSolidMesh(result.solidMesh());
-                                        generatedChunk.setWaterMesh(result.waterMesh());
-
                                         generatedChunk.setReadyToUpload(true);
                                         activeChunks.put(chunkKey, generatedChunk);
                                     }
                                 } finally {
-                                    chunksInGeneration.remove(genKey);
+                                    // Wenn der Thread fertig (oder abgestürzt) ist,
+                                    // geben wir die Position für die Zukunft wieder frei
+                                    chunksInGeneration.remove(chunkKey);
                                 }
                             });
                         }
                     }
-                    // Fall 2: Chunk existiert, benötigt aber ein anderes LOD (z.B. Spieler nähert sich)
-                    else {
-                        int oldLod = chunk.getLod();
-                        chunk.setLod(targetLod);
 
-                        // Wenn für das neue Ziel-LOD noch keine Meshes existieren, im Hintergrund anfordern
-                        if (!chunk.hasMeshesForCurrentLod()) {
-                            String genKey = makeGenKey(chunkKey, targetLod);
-                            if (chunksInGeneration.add(genKey)) {
-                                final VoxelChunk finalChunk = chunk;
-                                threadPool.submit(() -> {
-                                    try {
-                                        // Erzwinge die Erstellung des kleineren Voxel-Arrays pro LOD
-                                        finalChunk.getOrCreateLodArray(targetLod);
-
-                                        // Vorübergehend das LOD für den Generator erzwingen
-                                        int previousLod = finalChunk.getLod();
-                                        finalChunk.setLod(targetLod);
-
-                                        ChunkMeshGenerator.ChunkMeshResult result = ChunkMeshGenerator.generateMeshes(finalChunk, this);
-                                        finalChunk.setSolidMesh(result.solidMesh());
-                                        finalChunk.setWaterMesh(result.waterMesh());
-
-                                        finalChunk.setLod(previousLod); // Zurücksetzen auf den Thread-Sicherheits-Status
-                                        finalChunk.setReadyToUpload(true);
-                                    } finally {
-                                        chunksInGeneration.remove(genKey);
-                                    }
-                                });
-                            }
-                        }
+                    if (chunk != null &&
+                            Math.abs(x) <= viewRadius &&
+                            Math.abs(y) <= viewRadius &&
+                            Math.abs(z) <= viewRadius) {
+                        newActiveChunks.put(chunkKey, chunk);
                     }
                 }
+
             }
         }
 
-        // Chunks außerhalb des Radius entladen
-        for (Map.Entry<Vector3i, VoxelChunk> entry : activeChunks.entrySet()) {
-            Vector3i k = entry.getKey();
+        // Chunks, die komplett aus dem erweiterten Generierungs-Radius fliegen, löschen
+        for (Map.Entry<org.joml.Vector3i, VoxelChunk> entry : activeChunks.entrySet()) {
+            org.joml.Vector3i k = entry.getKey();
             int dx = Math.abs(k.x - centerChunk.x);
             int dy = Math.abs(k.y - centerChunk.y);
             int dz = Math.abs(k.z - centerChunk.z);
@@ -151,23 +120,25 @@ public class Level {
         int uploadsThisFrame = 0;
         int maxUploadsPerFrame = 8;
 
-        List<VoxelChunk> pendingChunks = new ArrayList<>();
+        java.util.List<VoxelChunk> pendingChunks = new java.util.ArrayList<>();
         for (VoxelChunk chunk : activeChunks.values()) {
-            // Ein Chunk braucht einen GPU-Upload, wenn der Thread fertig ist, das aktuelle LOD aber noch nicht hochgeladen wurde
-            if (chunk.isReadyToUpload() && !chunk.isFullyOccluded()) {
+            // KORREKTUR: Ein Chunk gilt als ausstehend, wenn er bereit ist (vom Hintergrund-Thread),
+            // aber weder das Solid- noch das Water-Mesh auf der GPU initialisiert wurden.
+            // Vollständig verdeckte Chunks (FullyOccluded) springen wir weiterhin über.
+            if (chunk.isReadyToUpload() && chunk.getSolidMesh() == null && chunk.getWaterMesh() == null && !chunk.isFullyOccluded()) {
                 pendingChunks.add(chunk);
             }
         }
 
         if (pendingChunks.isEmpty()) return;
 
-        Vector3i dims = getChunkDimensions();
+        // Nach Nähe zum Spieler sortieren (Identisch)
+        org.joml.Vector3i dims = getChunkDimensions();
         pendingChunks.sort((c1, c2) -> {
             float c1X = (c1.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
             float c1Y = (c1.getChunkPosition().y * dims.y) + (dims.y * 0.5f);
             float c1Z = (c1.getChunkPosition().z * dims.z) + (dims.z * 0.5f);
             float distSq1 = playerWorldPos.distanceSquared(c1X, c1Y, c1Z);
-
             float c2X = (c2.getChunkPosition().x * dims.x) + (dims.x * 0.5f);
             float c2Y = (c2.getChunkPosition().y * dims.y) + (dims.y * 0.5f);
             float c2Z = (c2.getChunkPosition().z * dims.z) + (dims.z * 0.5f);
@@ -175,22 +146,45 @@ public class Level {
             return Float.compare(distSq1, distSq2);
         });
 
+        int[][] directions = {{1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1}};
+        org.joml.Vector3i neighborKey = new org.joml.Vector3i();
+
         for (VoxelChunk chunk : pendingChunks) {
-            // ERKLÄRUNG: Da das rechenintensive Meshing jetzt komplett im Hintergrund-Thread stattfindet,
-            // ruft diese Schleife hier nur noch die finale VAO/VBO-Erzeugung auf der GPU auf.
-            // Angenommen, deine Mesh-Klasse hat eine Methode wie `.uploadToGPU()`.
+            // KORREKTUR: Semikolon hinzugefügt und Übergabe des Levels (this) korrigiert,
+            // damit der Generator das Cross-Chunk-Culling fehlerfrei berechnen kann.
+            ChunkMeshGenerator.ChunkMeshResult result = ChunkMeshGenerator.generateMeshes(chunk, this);
 
-            Mesh solid = chunk.getSolidMesh();
-            Mesh water = chunk.getWaterMesh();
+            // Beide generierten Meshes im Chunk-Objekt hinterlegen
+            chunk.setSolidMesh(result.solidMesh());
+            chunk.setWaterMesh(result.waterMesh());
 
-            if (solid != null && !solid.isUploaded()) {
-                solid.uploadToGPU();
-            }
-            if (water != null && !water.isUploaded()) {
-                water.uploadToGPU();
-            }
-
+            // 1. Eigene Textur hochladen
+            chunk.update3DTexture(this);
             chunk.setReadyToUpload(false);
+
+            // 2. --- DIE NACHBARN TRIGGERN ---
+            org.joml.Vector3i cPos = chunk.getChunkPosition();
+            for (int[] d : directions) {
+                neighborKey.set(cPos.x + d[0], cPos.y + d[1], cPos.z + d[2]);
+                VoxelChunk neighbor = activeChunks.get(neighborKey);
+
+                // KORREKTUR: Ein Nachbar gilt als aktiv gerendert, wenn er mindestens
+                // eines der beiden Meshes besitzt (Solid oder Wasser).
+                if (neighbor != null && (neighbor.getSolidMesh() != null || neighbor.getWaterMesh() != null)) {
+                    neighbor.update3DTexture(this);
+
+                    // PRO-TIPP FÜR CPU-CULLING: Wenn ein neuer Chunk geladen wird,
+                    // verändert er die Sichtbarkeit der äußeren Flächen seiner Nachbar-Chunks!
+                    // Um Löcher an alten Chunkgrenzen zu vermeiden, regenerieren wir hier optional
+                    // das CPU-Mesh des Nachbarn, falls dieser bereits sichtbar war:
+                    /*
+                    neighbor.cleanupMeshes(); // Altes VBO/VAO löschen, um RAM-Lecks zu vermeiden
+                    ChunkMeshGenerator.ChunkMeshResult nResult = ChunkMeshGenerator.generateMeshes(neighbor, this);
+                    neighbor.setSolidMesh(nResult.solidMesh());
+                    neighbor.setWaterMesh(nResult.waterMesh());
+                    */
+                }
+            }
 
             uploadsThisFrame++;
             if (uploadsThisFrame >= maxUploadsPerFrame) {

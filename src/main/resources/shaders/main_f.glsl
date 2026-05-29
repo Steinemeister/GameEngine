@@ -29,7 +29,7 @@ void main() {
     vec3 normal = normalize(Normal);
 
     // Ambienter Lichtanteil
-    vec3 ambient = 0.50 * texColor;
+    vec3 ambient = 0.30 * texColor;
 
     // Diffuser Lichtanteil
     vec3 lightDir = normalize(-sunDirection);
@@ -39,5 +39,14 @@ void main() {
     // Finale Voxel-Farbe zusammensetzen
     vec3 finalVoxelColor = (ambient + diffuse) * texColor;
 
-    FragColor = vec4(finalVoxelColor, 1.0);
+    // 3D Nebel Berechnung
+    float distance = length(ViewSpacePos);
+    float fogStart = far_plane * 0.4;
+    float fogEnd = far_plane * 0.95;
+    float fogFactor = clamp((distance - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+
+    vec3 fogColor = vec3(0.1, 0.1, 0.1) * sunColor;
+    vec3 finalColorWithFog = mix(finalVoxelColor, fogColor, fogFactor);
+
+    FragColor = vec4(finalColorWithFog, 1.0);
 }
