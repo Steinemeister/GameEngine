@@ -50,8 +50,6 @@ public class WorldGen {
 
         boolean containsNonAir = false;
 
-        // 1. DYNAMISCHES GRID-ARRAY ANLEGEN
-        // Wir berechnen, wie viele Stützpunkte wir für die Breite des Chunks benötigen (+1 für die Endkante)
         int numSamplesX = (dims.x / NOISE_SAMPLE_STEP) + 1;
         int numSamplesZ = (dims.z / NOISE_SAMPLE_STEP) + 1;
         int[][] sampleGrid = new int[numSamplesX][numSamplesZ];
@@ -93,7 +91,11 @@ public class WorldGen {
                 float interpolatedHeightVal = hBottom + fz * (hTop - hBottom);
                 int surfaceHeight = Math.round(interpolatedHeightVal);
 
-                // Vertikale Y-Schleife (Befüllung)
+                float deltaX = Math.abs(h10 - h00) / (float) NOISE_SAMPLE_STEP;
+                float deltaZ = Math.abs(h01 - h00) / (float) NOISE_SAMPLE_STEP;
+                // Ein Wert > 1.2 bedeutet einen Höhenunterschied von mehr als 1.2 Blöcken pro Block Distanz
+                boolean isSteepCliff = (deltaX > 1.2f || deltaZ > 1.2f);
+
                 for (int y = 0; y < dims.y; y++) {
                     int globalY = worldYOffset + y;
 
@@ -101,7 +103,8 @@ public class WorldGen {
                         continue;
                     }
 
-                    byte blockId = determineBlockType(globalX, globalY, globalZ, surfaceHeight);
+                    // Übergabe des Steilheits-Flags an die Blockbestimmung
+                    byte blockId = determineBlockType(globalX, globalY, globalZ, surfaceHeight, isSteepCliff);
 
                     if (blockId != BLOCK_AIR) {
                         chunk.setVoxel(x, y, z, blockId);
@@ -115,12 +118,7 @@ public class WorldGen {
         return chunk;
     }
 
-    // =========================================================================
-    // ISOLIERTE NOISE-BERECHNUNG (Ersetzt die alte getOrCreateSurfaceHeight-Logik)
-    // =========================================================================
     private int calculateNoiseHeight(int globalX, int globalZ) {
-        // Da wir nur noch 4-mal pro Chunk anklopfen, können wir das Caching über
-        // den long-Key beibehalten, um Nachbar-Chunks perfekt zu bedienen!
         long columnKey = ((long) globalX << 32) | (globalZ & 0xFFFFFFFFL);
 
         Integer cachedHeight = surfaceHeightCache.get(columnKey);
@@ -128,25 +126,54 @@ public class WorldGen {
             return cachedHeight;
         }
 
-        // Reine mathematische FBM-Abfrage
-        double continentalNoise = noise.openSimplex2DFbm(globalX * 0.001, globalZ * 0.001, 2, 2.0, 0.4);
-        double detailNoise = noise.openSimplex2DFbm(globalX * 0.008, globalZ * 0.008, 4, 2.0, 0.45);
+        // 1. DOMAIN WARPING (Koordinaten-Verschiebung)
+        // Wir holen uns zwei separate Rauschwerte für die X- und Z-Achse
+        double warpScale = 0.004; // Wie großflächig die Verzerrung ist
+        double warpIntensity = 45.0; // Wie stark die Kanten verzerrt/übergehängt werden
 
-        double mountainHeight = (continentalNoise * 35.0) + (detailNoise * 20.0);
-        double valleyHeight   = (continentalNoise * 15.0) + (detailNoise * 6.0);
+        double warpX = noise.openSimplex2DFbm(globalX * warpScale, globalZ * warpScale, 2, 2.0, 0.5) * warpIntensity;
+        double warpZ = noise.openSimplex2DFbm((globalX + 500) * warpScale, (globalZ + 500) * warpScale, 2, 2.0, 0.5) * warpIntensity;
 
-        double t = (continentalNoise + 1.0) * 0.5;
-        t = t * t * (3.0 - 2.0 * t);
+        // Die neuen, verzerrten Koordinaten für die eigentliche Landschaft
+        double distortedX = globalX + warpX;
+        double distortedZ = globalZ + warpZ;
 
-        double finalHeightModifier = valleyHeight + t * (mountainHeight - valleyHeight);
+        // 2. EIGENTLICHE LANDSCHAFTS-BERECHNUNG (auf den verzerrten Koordinaten)
+        // Grobe Landmassen (Flachland vs. Gebirge)
+        double continental = noise.openSimplex2DFbm(distortedX * 0.0005, distortedZ * 0.0005, 3, 2.0, 0.4);
+
+        // Rauheit/Erosions-Faktor
+        double erosion = noise.openSimplex2DFbm(distortedX * 0.0015, distortedZ * 0.0015, 3, 2.0, 0.5);
+
+        // Detail-Rauschen
+        double detail = noise.openSimplex2DFbm(distortedX * 0.007, distortedZ * 0.007, 4, 2.0, 0.48);
+
+        // Ridged-Noise für scharfe Bergrücken
+        double mountainNoise = 1.0 - Math.abs(detail);
+        mountainNoise = mountainNoise * mountainNoise;
+
+        // Sanfter Übergang für die Kontinentalplatte
+        double influence = (continental + 1.0) * 0.5;
+        influence = influence * influence * (3.0 - 2.0 * influence);
+
+        // Höhenberechnung kombiniert aus Basis, Erosion und Gebirge
+        double baseValley = influence * 25.0 + detail * 4.0;
+        double ruggedMountains = influence * 85.0 * (1.0 - Math.abs(erosion)) + (mountainNoise * 30.0);
+
+        // Gewichtete Zusammenführung
+        double finalHeightModifier = baseValley + influence * (ruggedMountains - baseValley);
+
         int calculatedHeight = BASE_HEIGHT + (int) Math.round(finalHeightModifier);
+
+        // Schutz gegen Überschreiten der Weltgrenzen
+        if (calculatedHeight >= MAX_HEIGHT) calculatedHeight = MAX_HEIGHT - 1;
+        if (calculatedHeight < 1) calculatedHeight = 1;
 
         surfaceHeightCache.put(columnKey, calculatedHeight);
         return calculatedHeight;
     }
 
-    private byte determineBlockType(int globalX, int globalY, int globalZ, int surfaceHeight) {
-        // A: Über der Erdoberfläche (Himmel oder Ozean-Wasser)
+    private byte determineBlockType(int globalX, int globalY, int globalZ, int surfaceHeight, boolean isSteepCliff) {
         if (globalY > surfaceHeight) {
             if (globalY <= WATER_LEVEL) {
                 return BLOCK_WATER;
@@ -154,44 +181,59 @@ public class WorldGen {
             return BLOCK_AIR;
         }
 
-        // B: Exakt auf der Erdoberfläche
-        if (globalY == surfaceHeight) {
-            return (globalY <= WATER_LEVEL + 1) ? BLOCK_DIRT : BLOCK_GRASS;
+        // B: Höhlengenerierung (Zuerst prüfen, damit Höhlen die Oberfläche durchbrechen können)
+        if (isInsideCave(globalX, globalY, globalZ)) {
+            if (globalY <= WATER_LEVEL) {
+                return BLOCK_WATER;
+            }
+            return BLOCK_AIR;
         }
 
-        // C: Die Erdschicht direkt unter dem Oberflächenblock
+        // C: Steile Klippen (Sofort Stein, keine Erde/Gras)
+        if (isSteepCliff && globalY > WATER_LEVEL) {
+            return BLOCK_STONE;
+        }
+
+        // D: Normale Erdoberfläche
+        if (globalY == surfaceHeight) {
+            if (globalY <= WATER_LEVEL + 2) {
+                return BLOCK_DIRT;
+            }
+            return BLOCK_GRASS;
+        }
+
+        // E: Die Erdschicht unter der Oberfläche
         if (globalY > surfaceHeight - 4) {
             return BLOCK_DIRT;
         }
 
-        // D: DIE TIEFE ERDKRUSTE (STEIN)
-        // Standardmäßig Stein platzieren, es sei denn, eine Höhle schneidet ihn weg
-//        if (isInsideCave(globalX, globalY, globalZ)) {
-//            return BLOCK_AIR;
-//        }
-
+        // F: Tiefe Erdkruste
         return BLOCK_STONE;
     }
 
     private boolean isInsideCave(int globalX, int globalY, int globalZ) {
-        double caveCenterHeight = -30.0;
-        double caveZoneWidth = 150.0;
-
-        double distanceToCenter = Math.abs(globalY - caveCenterHeight);
-        double caveSizeFactor = 1.0 - (distanceToCenter / caveZoneWidth);
-
-        if (caveSizeFactor <= 0.01) {
+        if (globalY > 120 || globalY < 5) {
             return false;
         }
 
-        // Vertikales Dämpfungsprofil per Smoothstep berechnen
-        caveSizeFactor = caveSizeFactor * caveSizeFactor * (3.0 - 2.0 * caveSizeFactor);
+        // Frequenzen für die Tunnel-Breite und Kurven
+        double scale3D = 0.025;
 
-        double scale3D = 0.022;
-        double n3d = noise.openSimplex(globalX * scale3D, globalY * 0.015, globalZ * scale3D);
-        double spaghettiNoise = Math.abs(n3d);
+        // Zwei unabhängige 3D-Noise-Kanäle für die Verschnitt-Methode
+        double nA = noise.openSimplex(globalX * scale3D, globalY * 0.035, globalZ * scale3D);
+        double nB = noise.openSimplex((globalX + 1000) * scale3D, globalY * 0.035, (globalZ + 1000) * scale3D);
 
-        double tunnelThickness = 0.01 + (caveSizeFactor * 0.06);
-        return spaghettiNoise < tunnelThickness;
+        // Schwellenwert: Je kleiner, desto dünner/seltener die Tunnel
+        double threshold = 0.08;
+
+        // Wenn beide Noises sehr nah bei 0 sind, kreuzen sie sich und bilden einen Tunnel
+        boolean isTunnel = Math.abs(nA) < threshold && Math.abs(nB) < threshold;
+
+        if (isTunnel) {
+            // Große "Käselöcher" verhindern, indem wir sehr dicke Knotenpunkte kappen
+            return Math.abs(nA) + Math.abs(nB) > 0.02;
+        }
+
+        return false;
     }
 }
