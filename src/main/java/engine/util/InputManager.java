@@ -18,14 +18,14 @@ public class InputManager {
     private boolean firstMouse = true;
 
     // --- Physikalische Konstanten ---
-    private final float movementSpeed = 6.0f;     // Gehgeschwindigkeit (etwas langsamer als freies Fliegen)
+    private final float movementSpeed = 4.0f;     // Gehgeschwindigkeit (etwas langsamer als freies Fliegen)
     private final float mouseSensitivity = 0.15f;
     private final float playerRadius = 0.3f;
     private final float playerHeight = 1.8f;      // Augenhöhe des Spielers
 
     // --- NEU: Schwerkraft-Variablen ---
     private final float gravity = -28.0f;         // Fallbeschleunigung (Blöcke pro Quadratsekunde)
-    private final float jumpForce = 8.5f;         // Sprungkraft nach oben
+    private final float jumpForce = 8.0f;         // Sprungkraft nach oben
     private float verticalVelocity = 0.0f;        // Aktuelle Fall-/Steiggeschwindigkeit auf der Y-Achse
     private boolean isGrounded = false;           // Steht der Spieler aktuell fest auf dem Boden?
 
@@ -135,12 +135,12 @@ public class InputManager {
 
 
         // --- 4. Sprung- und Sink-Eingabe basierend auf dem Spielmodus ---
-        boolean isShiftDown = isKeyDown(GLFW_KEY_LEFT_SHIFT);
+        boolean isStrgDown = isKeyDown(GLFW_KEY_LEFT_CONTROL);
         float speedThisFrame = movementSpeed;
 
         if (collisionEnabled) {
             // SPRINTEN IM SURVIVAL (Geschwindigkeit erhöhen)
-            if (isShiftDown) {
+            if (isStrgDown) {
                 speedThisFrame *= 2.5f;
             }
 
@@ -152,7 +152,7 @@ public class InputManager {
         } else {
             // STEUERUNG IM CREATIVE / NO-CLIP
             // Auch im Fliegen erhöht Shift die Fluggeschwindigkeit (Schnellflug)
-            if (isShiftDown) {
+            if (isStrgDown) {
                 speedThisFrame *= 3.0f;
             }
 
@@ -161,7 +161,7 @@ public class InputManager {
                 position.y += speedThisFrame * deltaTime;
             }
             // KORREKTUR: Shift-Taste fliegt im Creative-Modus nach unten!
-            if (isShiftDown) {
+            if (isKeyDown(GLFW_KEY_LEFT_SHIFT)) {
                 position.y -= speedThisFrame * deltaTime;
             }
         }

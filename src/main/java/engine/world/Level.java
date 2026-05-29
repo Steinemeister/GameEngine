@@ -7,6 +7,7 @@ import org.joml.Vector3f;
 import org.joml.Vector3i;
 
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -30,7 +31,7 @@ public class Level {
         this.activeChunks = new ConcurrentHashMap<>();
         this.threadPool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() - 2);
 
-        this.worldGen = new WorldGen(1337L);
+        this.worldGen = new WorldGen(new Random().nextLong());
     }
 
     public VoxelChunk loadChunk(int cx, int cy, int cz) {
