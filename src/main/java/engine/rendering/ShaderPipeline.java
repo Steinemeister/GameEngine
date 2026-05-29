@@ -1,7 +1,5 @@
 package engine.rendering;
 
-import engine.lighting.PointLight;
-import engine.object.Object;
 import engine.util.Camera;
 import logger.Logger;
 import logger.LoggerFactory;
