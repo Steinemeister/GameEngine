@@ -162,17 +162,17 @@ public class Noise {
         hash ^= (hash >>> 31);
 
         int index = (int) (hash & 0x07);
-        switch (index) {
-            case 0: return dx + dy;
-            case 1: return -dx + dy;
-            case 2: return dx - dy;
-            case 3: return -dx - dy;
-            case 4: return dx * 2.0;
-            case 5: return -dx * 2.0;
-            case 6: return dy * 2.0;
-            case 7: return -dy * 2.0;
-            default: return 0;
-        }
+        return switch (index) {
+            case 0 -> dx + dy;
+            case 1 -> -dx + dy;
+            case 2 -> dx - dy;
+            case 3 -> -dx - dy;
+            case 4 -> dx * 2.0;
+            case 5 -> -dx * 2.0;
+            case 6 -> dy * 2.0;
+            case 7 -> -dy * 2.0;
+            default -> 0;
+        };
     }
 
     private double extrapolate3D(int gridX, int gridY, int gridZ, double dx, double dy, double dz) {

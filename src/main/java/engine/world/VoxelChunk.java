@@ -28,13 +28,11 @@ public class VoxelChunk {
     }
 
     private int getIndex(int x, int y, int z) {
-        return x + (y * dimensions.x) + (z * dimensions.x * dimensions.y);
+        return (x & 15) + ((y & 15) << 4) + ((z & 15) << 8);
     }
 
     public void setVoxel(int x, int y, int z, byte blockId) {
-        if (x >= 0 && x < dimensions.x && y >= 0 && y < dimensions.y && z >= 0 && z < dimensions.z) {
-            voxels[getIndex(x, y, z)] = blockId;
-        }
+        voxels[getIndex(x, y, z)] = blockId;
     }
 
     public byte getVoxel(int x, int y, int z) {
@@ -46,6 +44,12 @@ public class VoxelChunk {
 
     public void fill(byte blockId) {
         java.util.Arrays.fill(voxels, blockId);
+    }
+
+    public void fillColumn(int x, int z, int startY, int endY, byte blockId) {
+        for (int y = startY; y < endY; y++) {
+            this.voxels[getIndex(x, y, z)] = blockId;
+        }
     }
 
     /**

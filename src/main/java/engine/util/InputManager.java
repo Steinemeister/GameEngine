@@ -150,6 +150,7 @@ public class InputManager {
                 isGrounded = false;
             }
         } else {
+            speedThisFrame *= 2;
             // STEUERUNG IM CREATIVE / NO-CLIP
             // Auch im Fliegen erhöht Shift die Fluggeschwindigkeit (Schnellflug)
             if (isStrgDown) {

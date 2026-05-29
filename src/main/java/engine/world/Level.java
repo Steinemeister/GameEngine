@@ -174,16 +174,7 @@ public class Level {
                 if (neighbor != null && (neighbor.getSolidMesh() != null || neighbor.getWaterMesh() != null)) {
                     neighbor.update3DTexture(this);
 
-                    // PRO-TIPP FÜR CPU-CULLING: Wenn ein neuer Chunk geladen wird,
-                    // verändert er die Sichtbarkeit der äußeren Flächen seiner Nachbar-Chunks!
-                    // Um Löcher an alten Chunkgrenzen zu vermeiden, regenerieren wir hier optional
-                    // das CPU-Mesh des Nachbarn, falls dieser bereits sichtbar war:
-                    /*
-                    neighbor.cleanupMeshes(); // Altes VBO/VAO löschen, um RAM-Lecks zu vermeiden
-                    ChunkMeshGenerator.ChunkMeshResult nResult = ChunkMeshGenerator.generateMeshes(neighbor, this);
-                    neighbor.setSolidMesh(nResult.solidMesh());
-                    neighbor.setWaterMesh(nResult.waterMesh());
-                    */
+                    rebuildChunkMeshImmediate(cPos);
                 }
             }
 
